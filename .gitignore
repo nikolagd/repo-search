@@ -205,3 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+data/*
+!data/.gitkeep
+!data/sample_fon_page1.xml
