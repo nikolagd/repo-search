@@ -1,0 +1,48 @@
+from pathlib import Path
+
+from etl.db import get_connection, insert_publication
+from etl.oai_client import fetch_page
+from etl.parser import parse_oai_xml
+
+
+def main():
+    output_dir = Path("data")
+    output_dir.mkdir(exist_ok=True)
+
+    conn = get_connection()
+    repo_id = 1
+
+    total_processed = 0
+    page_num = 1
+
+    xml_text = fetch_page()
+
+    while True:
+        # Cuva xml za proveru
+        output_file = output_dir / f"fon_page_{page_num}.xml"
+        output_file.write_text(xml_text, encoding="utf-8")
+
+        records, token = parse_oai_xml(xml_text)
+
+        print(f"Page {page_num}: {len(records)} records")
+
+        for record in records:
+            insert_publication(conn, repo_id, record)
+            total_processed += 1
+
+        if not token:
+            print("No more pages.")
+            break
+
+        print(f"Next token: {token}")
+
+        xml_text = fetch_page(token)
+        page_num += 1
+
+    conn.close()
+
+    print(f"\nTotal processed into DB: {total_processed}")
+
+
+if __name__ == "__main__":
+    main()
