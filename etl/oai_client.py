@@ -18,7 +18,7 @@ METADATA_PREFIX = os.getenv("OAI_METADATA_PREFIX", "oai_dc")
 #    response.raise_for_status()
 #    return response.text
 
-def fetch_page(resumption_token=None) -> str:
+def fetch_page(resumption_token=None, from_date=None) -> str:
     if resumption_token:
         params = {
             "verb": "ListRecords",
@@ -29,6 +29,9 @@ def fetch_page(resumption_token=None) -> str:
             "verb": "ListRecords",
             "metadataPrefix": METADATA_PREFIX,
         }
+
+        if from_date:
+            params["from"] = from_date
 
     response = requests.get(BASE_URL, params=params, timeout=60)
     response.raise_for_status()

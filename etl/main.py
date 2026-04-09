@@ -1,6 +1,6 @@
 from pathlib import Path
-
-from etl.db import get_connection, insert_publication
+from datetime import datetime
+from etl.db import get_connection, insert_publication, get_last_harvest, update_last_harvest
 from etl.oai_client import fetch_page
 from etl.parser import parse_oai_xml
 
@@ -14,8 +14,14 @@ def main():
 
     total_processed = 0
     page_num = 1
+    last_harvest = get_last_harvest(conn, repo_id)
 
-    xml_text = fetch_page()
+    if last_harvest:
+        from_date = last_harvest.strftime("%Y-%m-%dT%H:%M:%S")
+    else:
+        from_date = None
+
+    xml_text = fetch_page(from_date=from_date)
 
     while True:
         # Cuva xml za proveru
@@ -23,7 +29,7 @@ def main():
         output_file.write_text(xml_text, encoding="utf-8")
 
         records, token = parse_oai_xml(xml_text)
-
+        print(f"Using from_date: {from_date}")
         print(f"Page {page_num}: {len(records)} records")
 
         for record in records:
@@ -39,6 +45,8 @@ def main():
         xml_text = fetch_page(token)
         page_num += 1
 
+    update_last_harvest(conn, repo_id)
+    
     conn.close()
 
     print(f"\nTotal processed into DB: {total_processed}")
