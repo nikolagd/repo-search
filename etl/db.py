@@ -95,3 +95,21 @@ def insert_publication(conn, repo_id, record):
             """, (publication_id, author_id))
 
     conn.commit()
+
+
+def get_last_harvest(conn, repo_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT last_harvest FROM repository WHERE id = %s",
+            (repo_id,)
+        )
+        result = cur.fetchone()
+        return result[0] if result else None
+    
+def update_last_harvest(conn, repo_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE repository SET last_harvest = NOW() WHERE id = %s",
+            (repo_id,)
+        )
+    conn.commit()
