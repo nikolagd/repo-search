@@ -113,3 +113,15 @@ def update_last_harvest(conn, repo_id):
             (repo_id,)
         )
     conn.commit()
+
+def update_embedding(conn, publication_id, embedding):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE publication
+            SET embedding = %s
+            WHERE id = %s
+            """,
+            (embedding, publication_id),
+        )
+    conn.commit()
