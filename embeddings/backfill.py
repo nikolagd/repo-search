@@ -1,4 +1,4 @@
-from etl.embeddings import build_document_text, model
+from embeddings.model import build_document_text, model
 from etl.db import get_connection, update_embedding
 
 
