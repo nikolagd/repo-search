@@ -13,10 +13,11 @@ def semantic_search(query: str, limit: int = 10, year_from: int | None = None):
     conn = get_connection()
     query_vector = embed_query(query)
 
-    base_query = """
+    sql = """
         SELECT
             id,
             title,
+            abstract,
             source_url,
             date,
             embedding <-> %s::vector AS distance
@@ -25,21 +26,34 @@ def semantic_search(query: str, limit: int = 10, year_from: int | None = None):
     """
 
     params = [query_vector]
-
-    # dodavanje filtera za godinu
-    if year_from:
-        base_query += " AND date >= %s"
+    # parsiranje godine iz upita
+    if year_from is not None:
+        sql += " AND date >= %s"
         params.append(f"{year_from}-01-01")
 
-    # redosled
-    base_query += " ORDER BY embedding <-> %s::vector LIMIT %s"
+    sql += """
+        ORDER BY embedding <-> %s::vector
+        LIMIT %s
+    """
 
     params.append(query_vector)
     params.append(limit)
 
     with conn.cursor() as cur:
-        cur.execute(base_query, params)
-        results = cur.fetchall()
+        cur.execute(sql, params)
+        rows = cur.fetchall()
 
     conn.close()
+
+    results = []
+    for row in rows:
+        results.append({
+            "id": row[0],
+            "title": row[1],
+            "abstract": row[2],
+            "source_url": row[3],
+            "date": row[4],
+            "distance": float(row[5]),
+        })
+
     return results
