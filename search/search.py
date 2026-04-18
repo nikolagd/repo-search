@@ -9,7 +9,7 @@ def embed_query(query: str):
     ).tolist()
 
 
-def semantic_search(query: str, limit: int = 10, year_from: int | None = None):
+def semantic_search(query: str, limit: int = 10, year_from=None, year_to=None):
     conn = get_connection()
     query_vector = embed_query(query)
 
@@ -20,7 +20,7 @@ def semantic_search(query: str, limit: int = 10, year_from: int | None = None):
             abstract,
             source_url,
             date,
-            embedding <-> %s::vector AS distance
+            embedding <=> %s::vector AS distance
         FROM publication
         WHERE embedding IS NOT NULL
     """
@@ -31,8 +31,12 @@ def semantic_search(query: str, limit: int = 10, year_from: int | None = None):
         sql += " AND date >= %s"
         params.append(f"{year_from}-01-01")
 
+    if year_to is not None:
+        sql += " AND date <= %s"
+        params.append(f"{year_to}-12-31")
+
     sql += """
-        ORDER BY embedding <-> %s::vector
+        ORDER BY embedding <=> %s::vector
         LIMIT %s
     """
 
