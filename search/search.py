@@ -49,15 +49,22 @@ def semantic_search(query: str, limit: int = 10, year_from=None, year_to=None):
 
     conn.close()
 
-    results = []
+    filtered = []
+
     for row in rows:
-        results.append({
+        distance = float(row[5])
+
+        #preskace velike udaljenosti
+        if distance > 0.5:
+            continue
+
+        filtered.append({
             "id": row[0],
             "title": row[1],
             "abstract": row[2],
             "source_url": row[3],
             "date": row[4],
-            "distance": float(row[5]),
+            "distance": distance,
         })
 
-    return results
+    return filtered

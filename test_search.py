@@ -1,7 +1,7 @@
 from search.search import semantic_search
-from search.parser import parse_query
+from search.query_handler import parse_query
 
-user_query = "radovi o ontologijama posle 2024"
+user_query = "pronadji radove o semantickom vebu posle 2019"
 
 parsed = parse_query(user_query)
 
@@ -19,3 +19,5 @@ for r in results:
     print("Title:", r["title"])
     print("Date:", r["date"])
     print("Distance:", round(r["distance"], 4))
+    print("URL:", r["source_url"])
+    
