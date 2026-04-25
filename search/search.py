@@ -9,34 +9,47 @@ def embed_query(query: str):
     ).tolist()
 
 
-def semantic_search(query: str, limit: int = 10, year_from=None, year_to=None):
+def semantic_search(query: str, limit: int = 10, year_from=None, year_to=None, must_terms=None):
     conn = get_connection()
     query_vector = embed_query(query)
+    must_terms = must_terms or []
 
     sql = """
         SELECT
-            id,
-            title,
-            abstract,
-            source_url,
-            date,
-            embedding <=> %s::vector AS distance
-        FROM publication
-        WHERE embedding IS NOT NULL
+            p.id,
+            p.title,
+            p.abstract,
+            p.source_url,
+            p.date,
+            p.embedding <=> %s::vector AS distance
+        FROM publication p
+        WHERE p.embedding IS NOT NULL
     """
 
     params = [query_vector]
-    # parsiranje godine iz upita
+
     if year_from is not None:
-        sql += " AND date >= %s"
+        sql += " AND p.date >= %s"
         params.append(f"{year_from}-01-01")
 
     if year_to is not None:
-        sql += " AND date <= %s"
+        sql += " AND p.date <= %s"
         params.append(f"{year_to}-12-31")
 
+    # obavezni termini?
+    #for term in must_terms:
+     #   sql += """
+      #      AND (
+       #         LOWER(COALESCE(p.title, '')) LIKE %s
+        #        OR LOWER(COALESCE(p.abstract, '')) LIKE %s
+         #   )
+        #"""
+        #like_term = f"%{term.lower()}%"
+        #params.append(like_term)
+        #params.append(like_term)
+
     sql += """
-        ORDER BY embedding <=> %s::vector
+        ORDER BY p.embedding <=> %s::vector
         LIMIT %s
     """
 
@@ -49,22 +62,18 @@ def semantic_search(query: str, limit: int = 10, year_from=None, year_to=None):
 
     conn.close()
 
-    filtered = []
-
+    results = []
     for row in rows:
         distance = float(row[5])
 
-        #preskace velike udaljenosti
-        if distance > 0.5:
-            continue
-
-        filtered.append({
+        results.append({
             "id": row[0],
             "title": row[1],
             "abstract": row[2],
             "source_url": row[3],
             "date": row[4],
             "distance": distance,
+            "similarity": 1 - distance
         })
 
-    return filtered
+    return results
