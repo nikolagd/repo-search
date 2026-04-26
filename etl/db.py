@@ -101,6 +101,49 @@ def insert_publication(conn, repo_id, record):
         raise
 
 
+def repository_from_row(row):
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "name": row[1],
+        "oai_endpoint": row[2],
+        "last_harvest": row[3],
+        "refresh_interval": row[4],
+    }
+
+
+def get_repository(conn, repo_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, name, oai_endpoint, last_harvest, refresh_interval
+            FROM repository
+            WHERE id = %s
+            """,
+            (repo_id,)
+        )
+        return repository_from_row(cur.fetchone())
+
+
+def get_due_repositories(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, name, oai_endpoint, last_harvest, refresh_interval
+            FROM repository
+            WHERE last_harvest IS NULL
+               OR (
+                   refresh_interval IS NOT NULL
+                   AND last_harvest + (refresh_interval * INTERVAL '1 minute') <= NOW()
+               )
+            ORDER BY id
+            """
+        )
+        return [repository_from_row(row) for row in cur.fetchall()]
+
+
 def get_last_harvest(conn, repo_id):
     with conn.cursor() as cur:
         cur.execute(
@@ -110,12 +153,18 @@ def get_last_harvest(conn, repo_id):
         result = cur.fetchone()
         return result[0] if result else None
     
-def update_last_harvest(conn, repo_id):
+def update_last_harvest(conn, repo_id, harvested_at=None):
     with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE repository SET last_harvest = NOW() WHERE id = %s",
-            (repo_id,)
-        )
+        if harvested_at is None:
+            cur.execute(
+                "UPDATE repository SET last_harvest = NOW() WHERE id = %s",
+                (repo_id,)
+            )
+        else:
+            cur.execute(
+                "UPDATE repository SET last_harvest = %s WHERE id = %s",
+                (harvested_at, repo_id)
+            )
     conn.commit()
 
 def update_embedding(conn, publication_id, embedding):

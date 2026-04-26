@@ -30,9 +30,11 @@ class OAIClientError(RuntimeError):
 #    response.raise_for_status()
 #    return response.text
 
-def request_oai(params):
+def request_oai(params, base_url=None):
+    base_url = base_url or BASE_URL
+
     try:
-        response = requests.get(BASE_URL, params=params, timeout=60)
+        response = requests.get(base_url, params=params, timeout=60)
         response.raise_for_status()
     except requests.RequestException as exc:
         raise OAIClientError(f"OAI request failed: {exc}") from exc
@@ -51,12 +53,12 @@ def request_oai(params):
     return response.text
 
 
-def list_metadata_formats() -> list[str]:
+def list_metadata_formats(base_url=None) -> list[str]:
     params = {
         "verb": "ListMetadataFormats",
     }
 
-    root = ET.fromstring(request_oai(params))
+    root = ET.fromstring(request_oai(params, base_url=base_url))
     return [
         el.text.strip()
         for el in root.findall(".//oai:metadataPrefix", NS)
@@ -64,25 +66,25 @@ def list_metadata_formats() -> list[str]:
     ]
 
 
-def choose_metadata_prefix() -> str:
+def choose_metadata_prefix(base_url=None) -> str:
     configured_prefix = (METADATA_PREFIX or "auto").strip()
 
     if configured_prefix and configured_prefix.lower() != "auto":
         return configured_prefix
 
-    available_prefixes = list_metadata_formats()
+    available_prefixes = list_metadata_formats(base_url=base_url)
 
     for prefix in PREFERRED_METADATA_PREFIXES:
         if prefix in available_prefixes:
             return prefix
 
-    raise RuntimeError(
+    raise OAIClientError(
         "Repository does not expose any supported metadata format: "
         + ", ".join(PREFERRED_METADATA_PREFIXES)
     )
 
 
-def fetch_page(resumption_token=None, from_date=None, metadata_prefix=None) -> str:
+def fetch_page(resumption_token=None, from_date=None, metadata_prefix=None, base_url=None) -> str:
     if resumption_token:
         params = {
             "verb": "ListRecords",
@@ -97,4 +99,4 @@ def fetch_page(resumption_token=None, from_date=None, metadata_prefix=None) -> s
         if from_date:
             params["from"] = from_date
 
-    return request_oai(params)
+    return request_oai(params, base_url=base_url)
