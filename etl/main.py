@@ -1,7 +1,9 @@
 from pathlib import Path
-from datetime import datetime
+import sys
+import psycopg2
+
 from etl.db import get_connection, insert_publication, get_last_harvest, update_last_harvest
-from etl.oai_client import fetch_page
+from etl.oai_client import OAIClientError, choose_metadata_prefix, fetch_page
 from etl.parser import parse_oai_xml
 
 
@@ -9,45 +11,56 @@ def main():
     output_dir = Path("data")
     output_dir.mkdir(exist_ok=True)
 
-    conn = get_connection()
     repo_id = 1
+    conn = None
 
-    total_processed = 0
-    page_num = 1
-    last_harvest = get_last_harvest(conn, repo_id)
+    try:
+        conn = get_connection()
 
-    if last_harvest:
-        from_date = last_harvest.strftime("%Y-%m-%dT%H:%M:%S")
-    else:
-        from_date = None
+        total_processed = 0
+        page_num = 1
+        last_harvest = get_last_harvest(conn, repo_id)
+        metadata_prefix = choose_metadata_prefix()
 
-    xml_text = fetch_page(from_date=from_date)
+        if last_harvest:
+            from_date = last_harvest.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            from_date = None
 
-    while True:
-        # Cuva xml za proveru
-        output_file = output_dir / f"fon_page_{page_num}.xml"
-        output_file.write_text(xml_text, encoding="utf-8")
+        xml_text = fetch_page(from_date=from_date, metadata_prefix=metadata_prefix)
 
-        records, token = parse_oai_xml(xml_text)
-        print(f"Using from_date: {from_date}")
-        print(f"Page {page_num}: {len(records)} records")
+        while True:
+            # Cuva xml za proveru
+            output_file = output_dir / f"fon_page_{page_num}.xml"
+            output_file.write_text(xml_text, encoding="utf-8")
 
-        for record in records:
-            insert_publication(conn, repo_id, record)
-            total_processed += 1
+            records, token = parse_oai_xml(xml_text, metadata_prefix)
+            print(f"Using metadata_prefix: {metadata_prefix}")
+            print(f"Using from_date: {from_date}")
+            print(f"Page {page_num}: {len(records)} records")
 
-        if not token:
-            print("No more pages.")
-            break
+            for record in records:
+                insert_publication(conn, repo_id, record)
+                total_processed += 1
 
-        print(f"Next token: {token}")
+            if not token:
+                print("No more pages.")
+                break
 
-        xml_text = fetch_page(token)
-        page_num += 1
+            print(f"Next token: {token}")
 
-    update_last_harvest(conn, repo_id)
-    
-    conn.close()
+            xml_text = fetch_page(token)
+            page_num += 1
+
+        update_last_harvest(conn, repo_id)
+
+    except (OAIClientError, psycopg2.Error) as exc:
+        print(f"ETL failed: {exc}", file=sys.stderr)
+        print("last_harvest was not updated.", file=sys.stderr)
+        raise SystemExit(1) from exc
+    finally:
+        if conn is not None:
+            conn.close()
 
     print(f"\nTotal processed into DB: {total_processed}")
 

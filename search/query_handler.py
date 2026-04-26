@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from search.llm_parser import parse_query_llm, repair_query_plan
-from search.parser import parse_query_fallback
+from search.parser import extract_year_constraints, parse_query_fallback
 
 CURRENT_YEAR = datetime.now().year
 
@@ -22,6 +22,20 @@ def clean_string_list(value):
                 cleaned.append(normalized)
 
     return cleaned
+
+
+def apply_explicit_year_constraints(plan: dict, original_query: str) -> dict:
+    parsed_years = extract_year_constraints(original_query)
+
+    if parsed_years["year_from"] is not None or parsed_years["year_to"] is not None:
+        plan["year_from"] = parsed_years["year_from"]
+        plan["year_to"] = parsed_years["year_to"]
+
+    if plan["year_from"] is not None and plan["year_to"] is not None:
+        if plan["year_from"] > plan["year_to"]:
+            plan["year_from"], plan["year_to"] = plan["year_to"], plan["year_from"]
+
+    return plan
 
 # json validacija vracena iz llma; nije "pameta", samo gruba provera json vrednosti
 def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, str | None]:
@@ -55,7 +69,7 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
     if not isinstance(interpreted_query, str) or not interpreted_query.strip():
         interpreted_query = f"Searching for: {embedding_queries[0]}"
 
-    return {
+    plan = {
         "embedding_queries": embedding_queries,
         "semantic_query": embedding_queries[0],
         "topic_phrases": topic_phrases,
@@ -64,7 +78,9 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
         "ranking_phrases": ranking_phrases,
         "interpreted_query": interpreted_query.strip(),
         "used_fallback": False,
-    }, None
+    }
+
+    return apply_explicit_year_constraints(plan, original_query), None
 
 
 def parse_query(query: str) -> dict:

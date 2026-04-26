@@ -17,10 +17,10 @@ FILLERS = [
 ]
 
 YEAR_PATTERNS = [
-    (r"\b(?:posle|nakon|after|since)\s+(\d{4})\b", "from"),
-    (r"\b(?:pre|prije|before|until)\s+(\d{4})\b", "to"),
-    (r"\b(?:od|from)\s+(\d{4})\b", "from"),
-    (r"\b(?:do|to)\s+(\d{4})\b", "to"),
+    (r"\b(?:posle|nakon|after)\s+(\d{4})\b", "from", 1),
+    (r"\b(?:since|od|from)\s+(\d{4})\b", "from", 0),
+    (r"\b(?:pre|prije|before)\s+(\d{4})\b", "to", -1),
+    (r"\b(?:until|do|to)\s+(\d{4})\b", "to", 0),
 ]
 
 
@@ -57,20 +57,33 @@ def extract_soft_terms(text: str) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
-def parse_query(query: str) -> dict:
+def extract_year_constraints(query: str) -> dict:
     clean = normalize_text(query.lower())
     year_from = None
     year_to = None
 
-    for pattern, key in YEAR_PATTERNS:
+    for pattern, key, offset in YEAR_PATTERNS:
         match = re.search(pattern, clean, flags=re.IGNORECASE)
         if match:
-            year = int(match.group(1))
+            year = int(match.group(1)) + offset
             if key == "from":
                 year_from = year
             else:
                 year_to = year
             clean = re.sub(pattern, " ", clean, flags=re.IGNORECASE)
+
+    clean = normalize_text(clean)
+
+    return {
+        "clean_query": clean,
+        "year_from": year_from,
+        "year_to": year_to,
+    }
+
+
+def parse_query(query: str) -> dict:
+    parsed_years = extract_year_constraints(query)
+    clean = parsed_years["clean_query"]
 
     soft_terms = extract_soft_terms(clean)
     clean = remove_fillers(clean)
@@ -82,22 +95,23 @@ def parse_query(query: str) -> dict:
 
     return {
         "semantic_query": clean or query.strip(),
-        "year_from": year_from,
-        "year_to": year_to,
+        "year_from": parsed_years["year_from"],
+        "year_to": parsed_years["year_to"],
         "soft_terms": soft_terms,
     }
 
 # samo se ova funkcija koristi, kod iznad se ne koristi
 def parse_query_fallback(query: str) -> dict:
-    query = query.strip()
+    parsed = parse_query(query)
+    semantic_query = parsed["semantic_query"]
 
     return {
-        "embedding_queries": [query],
-        "semantic_query": query,
+        "embedding_queries": [semantic_query],
+        "semantic_query": semantic_query,
         "topic_phrases": [],
-        "year_from": None,
-        "year_to": None,
+        "year_from": parsed["year_from"],
+        "year_to": parsed["year_to"],
         "ranking_phrases": [],
-        "interpreted_query": f"LLM parsing was unavailable, so I searched using the original query: {query}",
+        "interpreted_query": f"LLM parsing was unavailable, so I searched using: {semantic_query}",
         "used_fallback": True,
     }

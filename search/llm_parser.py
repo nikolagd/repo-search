@@ -46,8 +46,10 @@ Rules:
 - Never include temporal phrases in embedding_queries.
 - Extract dates only into year_from and year_to.
 - For Serbian and English temporal expressions:
-  - words meaning after/since/later-than set year_from to the mentioned year.
+  - words meaning after/later-than set year_from to the year after the mentioned year.
+  - words meaning since/from set year_from to the mentioned year.
   - words meaning before/older-than/earlier-than set year_to to the year before the mentioned year.
+  - words meaning until/to set year_to to the mentioned year.
   - standalone words meaning "year" do not change the direction of the date constraint.
 - Every year constraint mentioned by the user must be represented in year_from or year_to.
 - If interpreted_query mentions an after/since/later-than condition, year_from must be set consistently.
@@ -107,8 +109,10 @@ Repair rules:
 - Remove date wording from embedding_queries.
 - Do not invent or narrow the topic.
 - If the user asks for a broad field, keep it broad.
-- For Serbian and English temporal expressions, words meaning after/since/later-than set year_from to the mentioned year.
+- For Serbian and English temporal expressions, words meaning after/later-than set year_from to the year after the mentioned year.
+- For Serbian and English temporal expressions, words meaning since/from set year_from to the mentioned year.
 - For Serbian and English temporal expressions, words meaning before/older-than/earlier-than set year_to to the year before the mentioned year.
+- For Serbian and English temporal expressions, words meaning until/to set year_to to the mentioned year.
 - Every year constraint mentioned by the user must be represented in year_from or year_to.
 - interpreted_query must agree with year_from/year_to.
 - Return 2 to 4 embedding queries.
