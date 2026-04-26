@@ -1,28 +1,84 @@
-from search.llm_parser import parse_query_llm
-from search.parser import parse_query as parse_query_regex
+from datetime import datetime
+
+from search.llm_parser import parse_query_llm, repair_query_plan
+from search.parser import parse_query_fallback
+
+CURRENT_YEAR = datetime.now().year
 
 
-def is_valid(parsed: dict, original_query: str) -> bool:
-    if not isinstance(parsed, dict):
-        return False
+def clean_string_list(value):
+    if isinstance(value, str):
+        value = [value]
 
-    required_keys = ["semantic_query", "year_from", "year_to", "must_terms"]
-    if not all(k in parsed for k in required_keys):
-        return False
+    if not isinstance(value, list):
+        return []
 
-    if not isinstance(parsed["semantic_query"], str) or not parsed["semantic_query"].strip():
-        return False
+    cleaned = []
 
-    if not isinstance(parsed["must_terms"], list):
-        return False
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            normalized = item.strip()
+            if normalized not in cleaned:
+                cleaned.append(normalized)
 
-    return True
+    return cleaned
+
+# json validacija vracena iz llma; nije "pameta", samo gruba provera json vrednosti
+def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, str | None]:
+    if not isinstance(raw, dict):
+        return None, "LLM response is not a JSON object."
+
+    embedding_queries = clean_string_list(raw.get("embedding_queries"))
+    if not embedding_queries:
+        return None, "embedding_queries must be a non-empty list."
+
+    year_from = raw.get("year_from")
+    year_to = raw.get("year_to")
+
+    if year_from is not None and not isinstance(year_from, int):
+        return None, "year_from must be an integer or null."
+
+    if year_to is not None and not isinstance(year_to, int):
+        return None, "year_to must be an integer or null."
+
+    for year in (year_from, year_to):
+        if year is not None and not (1800 <= year <= CURRENT_YEAR + 1):
+            return None, "Extracted year is outside the allowed range."
+
+    if year_from is not None and year_to is not None and year_from > year_to:
+        year_from, year_to = year_to, year_from
+
+    topic_phrases = clean_string_list(raw.get("topic_phrases"))
+    ranking_phrases = clean_string_list(raw.get("ranking_phrases"))
+
+    interpreted_query = raw.get("interpreted_query")
+    if not isinstance(interpreted_query, str) or not interpreted_query.strip():
+        interpreted_query = f"Searching for: {embedding_queries[0]}"
+
+    return {
+        "embedding_queries": embedding_queries,
+        "semantic_query": embedding_queries[0],
+        "topic_phrases": topic_phrases,
+        "year_from": year_from,
+        "year_to": year_to,
+        "ranking_phrases": ranking_phrases,
+        "interpreted_query": interpreted_query.strip(),
+        "used_fallback": False,
+    }, None
+
 
 def parse_query(query: str) -> dict:
-    parsed = parse_query_llm(query)
+    raw_plan = parse_query_llm(query)
+    plan, reason = normalize_plan(raw_plan, query)
 
-    if not is_valid(parsed, query):
-        print("LLM parse failed -> regex fallback")
-        return parse_query_regex(query)
+    if plan is not None:
+        return plan
 
-    return parsed
+    if raw_plan is not None:
+        repaired_plan = repair_query_plan(query, raw_plan, reason or "Invalid query plan.")
+        plan, _ = normalize_plan(repaired_plan, query)
+
+        if plan is not None:
+            return plan
+
+    return parse_query_fallback(query)
