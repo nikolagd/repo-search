@@ -31,6 +31,20 @@ Pokretanje iz komandne linije sa:
 python -m etl.main
 ```
 
+`etl.main` koristi `OAI_BASE_URL` iz `.env` fajla da pronadje red u tabeli
+`repository`. Za eksplicitno biranje repozitorijuma mogu se koristiti:
+
+```bash
+python -m etl.main --repo-url https://example.com/oai/request
+python -m etl.main --repo-id 3
+```
+
+Ako URL jos ne postoji u tabeli `repository`, eksplicitno dodati:
+
+```bash
+python -m etl.main --repo-url https://example.com/oai/request --create-repo
+```
+
 Grube provere da li je upisivanje u bazu uspelo:
 ```bash
 psql -U postgres -d [naziv_baze] -p [port] -f etl/checks.sql

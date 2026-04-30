@@ -19,6 +19,10 @@ class OAIClientError(RuntimeError):
     pass
 
 
+class OAINoRecordsMatch(OAIClientError):
+    pass
+
+
 #test samo sa prvom stranom, bez resumption tokena
 #def fetch_first_page() -> str:
 #    params = {
@@ -48,6 +52,8 @@ def request_oai(params, base_url=None):
     if error_el is not None:
         code = error_el.get("code", "unknown")
         message = error_el.text.strip() if error_el.text else "No error message"
+        if code == "noRecordsMatch":
+            raise OAINoRecordsMatch(f"OAI error {code}: {message}")
         raise OAIClientError(f"OAI error {code}: {message}")
 
     return response.text

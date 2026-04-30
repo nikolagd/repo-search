@@ -127,6 +127,56 @@ def get_repository(conn, repo_id):
         return repository_from_row(cur.fetchone())
 
 
+def get_repository_by_endpoint(conn, oai_endpoint):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, name, oai_endpoint, last_harvest, refresh_interval
+            FROM repository
+            WHERE oai_endpoint = %s
+            ORDER BY id
+            LIMIT 1
+            """,
+            (oai_endpoint,)
+        )
+        return repository_from_row(cur.fetchone())
+
+
+def ensure_repository(conn, name, oai_endpoint, refresh_interval=None):
+    repository = get_repository_by_endpoint(conn, oai_endpoint)
+
+    if repository is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE repository
+                SET name = %s,
+                    refresh_interval = COALESCE(%s, refresh_interval)
+                WHERE id = %s
+                RETURNING id, name, oai_endpoint, last_harvest, refresh_interval
+                """,
+                (name, refresh_interval, repository["id"])
+            )
+            repository = repository_from_row(cur.fetchone())
+
+        conn.commit()
+        return repository
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO repository (name, oai_endpoint, refresh_interval)
+            VALUES (%s, %s, %s)
+            RETURNING id, name, oai_endpoint, last_harvest, refresh_interval
+            """,
+            (name, oai_endpoint, refresh_interval)
+        )
+        repository = repository_from_row(cur.fetchone())
+
+    conn.commit()
+    return repository
+
+
 def get_due_repositories(conn):
     with conn.cursor() as cur:
         cur.execute(

@@ -25,7 +25,7 @@ def call_llm_json(prompt: str) -> dict | None:
 
 
 def parse_query_llm(query: str) -> dict | None:
-    #glavni prompt za parsiranje korisnikovog upita u strukturirani plan pretrage
+    #glavni prompt za parsiranje korisnickog upita u strukturirani plan pretrage
     prompt = f"""
 You are the query understanding layer for an academic publication search engine.
 
