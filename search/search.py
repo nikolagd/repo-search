@@ -1,59 +1,170 @@
+import os
+
 from embeddings.model import model
 from etl.db import get_connection
+
+CANDIDATE_MULTIPLIER = int(os.getenv("SEARCH_CANDIDATE_MULTIPLIER", "6"))
+TOPIC_TITLE_BOOST = float(os.getenv("SEARCH_TOPIC_TITLE_BOOST", "0.04"))
+TOPIC_ABSTRACT_BOOST = float(os.getenv("SEARCH_TOPIC_ABSTRACT_BOOST", "0.01"))
+RANKING_PHRASE_BOOST = float(os.getenv("SEARCH_RANKING_PHRASE_BOOST", "0.02"))
+QUERY_COVERAGE_BOOST = float(os.getenv("SEARCH_QUERY_COVERAGE_BOOST", "0.003"))
 
 
 def embed_query(query: str):
     return model.encode(
         f"query: {query.strip()}",
-        normalize_embeddings=True
+        normalize_embeddings=True,
     ).tolist()
 
 
-def semantic_search(query: str, limit: int = 10, year_from: int | None = None):
-    conn = get_connection()
-    query_vector = embed_query(query)
+def phrase_boost(title, abstract, phrases, title_boost, abstract_boost):
+    if not phrases:
+        return 0.0
 
+    title_text = (title or "").lower()
+    abstract_text = (abstract or "").lower()
+    boost = 0.0
+
+    for phrase in phrases:
+        phrase = phrase.lower()
+
+        if phrase in title_text:
+            boost += title_boost
+        elif phrase in abstract_text:
+            boost += abstract_boost
+
+    return boost
+
+
+def fetch_vector_results(query_vector, limit, year_from, year_to):
     sql = """
         SELECT
-            id,
-            title,
-            abstract,
-            source_url,
-            date,
-            embedding <-> %s::vector AS distance
-        FROM publication
-        WHERE embedding IS NOT NULL
+            p.id,
+            p.title,
+            p.abstract,
+            p.source_url,
+            p.date,
+            p.embedding <=> %s::vector AS distance
+        FROM publication p
+        WHERE p.embedding IS NOT NULL
     """
 
     params = [query_vector]
-    # parsiranje godine iz upita
+
     if year_from is not None:
-        sql += " AND date >= %s"
+        sql += " AND p.date >= %s"
         params.append(f"{year_from}-01-01")
 
+    if year_to is not None:
+        sql += " AND p.date <= %s"
+        params.append(f"{year_to}-12-31")
+
     sql += """
-        ORDER BY embedding <-> %s::vector
+        ORDER BY distance ASC
         LIMIT %s
     """
 
-    params.append(query_vector)
     params.append(limit)
 
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        rows = cur.fetchall()
+    conn = get_connection()
 
-    conn.close()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def semantic_search(
+    query: str | None = None,
+    embedding_queries: list[str] | None = None,
+    limit: int = 10,
+    year_from: int | None = None,
+    year_to: int | None = None,
+    topic_phrases: list[str] | None = None,
+    ranking_phrases: list[str] | None = None,
+):
+    if embedding_queries is None:
+        embedding_queries = [query] if query else []
+
+    embedding_queries = [
+        item.strip()
+        for item in embedding_queries
+        if item and item.strip()
+    ]
+
+    topic_phrases = topic_phrases or []
+    ranking_phrases = ranking_phrases or []
+    candidate_limit = max(limit, limit * CANDIDATE_MULTIPLIER)
+
+    merged = {}
+
+    for embedding_query in embedding_queries:
+        query_vector = embed_query(embedding_query)
+        rows = fetch_vector_results(query_vector, candidate_limit, year_from, year_to)
+
+        for rank, row in enumerate(rows, start=1):
+            publication_id = row[0]
+            distance = float(row[5])
+            similarity = 1 - distance
+
+            existing = merged.get(publication_id)
+
+            if existing is None:
+                merged[publication_id] = {
+                    "id": row[0],
+                    "title": row[1],
+                    "abstract": row[2],
+                    "source_url": row[3],
+                    "date": row[4],
+                    "distance": distance,
+                    "similarity": similarity,
+                    "matched_query": embedding_query,
+                    "matched_queries": {embedding_query},
+                    "best_rank": rank,
+                }
+                continue
+
+            existing["matched_queries"].add(embedding_query)
+
+            if similarity > existing["similarity"]:
+                existing["distance"] = distance
+                existing["similarity"] = similarity
+                existing["matched_query"] = embedding_query
+                existing["best_rank"] = rank
 
     results = []
-    for row in rows:
-        results.append({
-            "id": row[0],
-            "title": row[1],
-            "abstract": row[2],
-            "source_url": row[3],
-            "date": row[4],
-            "distance": float(row[5]),
-        })
 
-    return results
+    for result in merged.values():
+        topic_boost = phrase_boost(
+            result["title"],
+            result["abstract"],
+            topic_phrases,
+            TOPIC_TITLE_BOOST,
+            TOPIC_ABSTRACT_BOOST,
+        )
+
+        ranking_boost = phrase_boost(
+            result["title"],
+            result["abstract"],
+            ranking_phrases,
+            RANKING_PHRASE_BOOST,
+            RANKING_PHRASE_BOOST,
+        )
+
+        coverage_boost = min(
+            len(result["matched_queries"]) * QUERY_COVERAGE_BOOST,
+            0.015,
+        )
+
+        result["topic_boost"] = topic_boost
+        result["ranking_boost"] = ranking_boost
+        result["coverage_boost"] = coverage_boost
+        result["score"] = result["similarity"] + topic_boost + ranking_boost + coverage_boost
+        result["matched_queries"] = sorted(result["matched_queries"])
+
+        results.append(result)
+
+    results.sort(key=lambda item: item["score"], reverse=True)
+    return results[:limit]
