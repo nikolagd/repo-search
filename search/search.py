@@ -60,7 +60,7 @@ def fetch_vector_results(query_vector, limit, year_from, year_to):
         params.append(f"{year_to}-12-31")
 
     sql += """
-        ORDER BY distance ASC
+        ORDER BY cosine_distance ASC
         LIMIT %s
     """
 
