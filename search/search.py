@@ -44,7 +44,7 @@ def fetch_vector_results(query_vector, limit, year_from, year_to):
             p.abstract,
             p.source_url,
             p.date,
-            p.embedding <=> %s::vector AS distance
+            p.embedding <=> %s::vector AS cosine_distance
         FROM publication p
         WHERE p.embedding IS NOT NULL
     """
@@ -106,8 +106,8 @@ def semantic_search(
 
         for rank, row in enumerate(rows, start=1):
             publication_id = row[0]
-            distance = float(row[5])
-            similarity = 1 - distance
+            cosine_distance = float(row[5])
+            cosine_similarity = 1 - cosine_distance
 
             existing = merged.get(publication_id)
 
@@ -118,8 +118,10 @@ def semantic_search(
                     "abstract": row[2],
                     "source_url": row[3],
                     "date": row[4],
-                    "distance": distance,
-                    "similarity": similarity,
+                    "cosine_distance": cosine_distance,
+                    "cosine_similarity": cosine_similarity,
+                    "distance": cosine_distance,
+                    "similarity": cosine_similarity,
                     "matched_query": embedding_query,
                     "matched_queries": {embedding_query},
                     "best_rank": rank,
@@ -128,9 +130,11 @@ def semantic_search(
 
             existing["matched_queries"].add(embedding_query)
 
-            if similarity > existing["similarity"]:
-                existing["distance"] = distance
-                existing["similarity"] = similarity
+            if cosine_similarity > existing["cosine_similarity"]:
+                existing["cosine_distance"] = cosine_distance
+                existing["cosine_similarity"] = cosine_similarity
+                existing["distance"] = cosine_distance
+                existing["similarity"] = cosine_similarity
                 existing["matched_query"] = embedding_query
                 existing["best_rank"] = rank
 
@@ -161,7 +165,7 @@ def semantic_search(
         result["topic_boost"] = topic_boost
         result["ranking_boost"] = ranking_boost
         result["coverage_boost"] = coverage_boost
-        result["score"] = result["similarity"] + topic_boost + ranking_boost + coverage_boost
+        result["score"] = result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost
         result["matched_queries"] = sorted(result["matched_queries"])
 
         results.append(result)
