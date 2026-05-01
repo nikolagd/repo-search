@@ -120,8 +120,6 @@ def semantic_search(
                     "date": row[4],
                     "cosine_distance": cosine_distance,
                     "cosine_similarity": cosine_similarity,
-                    "distance": cosine_distance,
-                    "similarity": cosine_similarity,
                     "matched_query": embedding_query,
                     "matched_queries": {embedding_query},
                     "best_rank": rank,
@@ -133,8 +131,6 @@ def semantic_search(
             if cosine_similarity > existing["cosine_similarity"]:
                 existing["cosine_distance"] = cosine_distance
                 existing["cosine_similarity"] = cosine_similarity
-                existing["distance"] = cosine_distance
-                existing["similarity"] = cosine_similarity
                 existing["matched_query"] = embedding_query
                 existing["best_rank"] = rank
 
