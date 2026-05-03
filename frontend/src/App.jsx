@@ -1,89 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Activity,
-  AlertCircle,
-  ArrowUpRight,
-  Database,
-  RefreshCw,
-  Search,
-  Server,
-} from "lucide-react";
 
-const EXAMPLE_QUERIES = [
-  "radovi o masinskom ucenju posle 2021",
-  "find papers about digital transformation since 2020",
-  "publikacije o informacionim sistemima koje pominju open data",
-];
-
-async function fetchJson(url, options) {
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload.detail || "Request failed");
-  }
-
-  return payload;
-}
-
-function formatDate(value) {
-  if (!value) {
-    return "No date";
-  }
-
-  return new Intl.DateTimeFormat("en", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatScore(value) {
-  return Number(value || 0).toFixed(3);
-}
-
-function Stat({ icon: Icon, label, value }) {
-  return (
-    <section className="stat">
-      <Icon aria-hidden="true" size={18} />
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
-    </section>
-  );
-}
-
-function EmptyState({ loading, error }) {
-  if (loading) {
-    return (
-      <div className="empty-state">
-        <RefreshCw aria-hidden="true" className="spin" size={24} />
-        <span>Searching publications...</span>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="empty-state error">
-        <AlertCircle aria-hidden="true" size={24} />
-        <span>{error}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="empty-state">
-      <Search aria-hidden="true" size={24} />
-      <span>Search results will appear here.</span>
-    </div>
-  );
-}
+import { fetchJson } from "./api/client";
+import OverviewStats from "./components/OverviewStats";
+import ResultsPanel from "./components/ResultsPanel";
+import SearchPanel from "./components/SearchPanel";
+import Topbar from "./components/Topbar";
+import { EXAMPLE_QUERIES } from "./constants/searchExamples";
 
 export default function App() {
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
@@ -95,7 +17,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const resultCount = searchPayload?.results?.length ?? 0;
   const yearLabel = useMemo(() => {
     const plan = searchPayload?.plan;
 
@@ -173,118 +94,27 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <span className="eyebrow">Repository intelligence</span>
-          <h1>Repo Search</h1>
-        </div>
-        <div className="system-status" title="API and database status">
-          <Server aria-hidden="true" size={18} />
-          <span>API {health?.status || "..."}</span>
-          <span className={health?.database === "ok" ? "dot ok" : "dot"} />
-          <span>DB {health?.database || "..."}</span>
-        </div>
-      </header>
+      <Topbar health={health} />
 
-      <section className="overview">
-        <Stat icon={Database} label="Repositories" value={stats?.repositories ?? repositories.length ?? "-"} />
-        <Stat icon={Activity} label="Publications" value={stats?.publications ?? "-"} />
-        <Stat icon={Search} label="Embedded" value={stats?.publications_with_embeddings ?? "-"} />
-        <Stat icon={RefreshCw} label="Last publication" value={formatDate(stats?.last_harvest)} />
-      </section>
+      <OverviewStats stats={stats} repositories={repositories} />
 
       <section className="workspace">
-        <form className="search-panel" onSubmit={submitSearch}>
-          <label htmlFor="query">Search query</label>
-          <textarea
-            id="query"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            rows={4}
-          />
+        <SearchPanel
+          examples={EXAMPLE_QUERIES}
+          limit={limit}
+          loading={loading}
+          onLimitChange={setLimit}
+          onQueryChange={setQuery}
+          onSubmit={submitSearch}
+          query={query}
+        />
 
-          <div className="examples" aria-label="Example queries">
-            {EXAMPLE_QUERIES.map((example) => (
-              <button
-                key={example}
-                type="button"
-                onClick={() => setQuery(example)}
-              >
-                {example}
-              </button>
-            ))}
-          </div>
-
-          <div className="controls">
-            <label htmlFor="limit">Results</label>
-            <input
-              id="limit"
-              type="number"
-              min="1"
-              max="50"
-              value={limit}
-              onChange={(event) => setLimit(Number(event.target.value))}
-            />
-            <button className="primary-action" type="submit" disabled={loading || !query.trim()}>
-              {loading ? <RefreshCw aria-hidden="true" className="spin" size={18} /> : <Search aria-hidden="true" size={18} />}
-              Search
-            </button>
-          </div>
-        </form>
-
-        <section className="results-panel">
-          <div className="results-header">
-            <div>
-              <span className="eyebrow">Results</span>
-              <h2>{resultCount ? `${resultCount} matches` : "No active search"}</h2>
-            </div>
-            <span className="year-pill">{yearLabel}</span>
-          </div>
-
-          {searchPayload?.plan && (
-            <div className="query-plan">
-              <span>{searchPayload.plan.interpreted_query}</span>
-              {searchPayload.plan.used_fallback && <strong>Fallback parser</strong>}
-            </div>
-          )}
-
-          {!searchPayload?.results?.length ? (
-            <EmptyState loading={loading} error={error} />
-          ) : (
-            <div className="results-list">
-              {searchPayload.results.map((result) => (
-                <article className="result-card" key={result.id}>
-                  <div className="result-score">
-                    <span>{formatScore(result.score)}</span>
-                    <small>score</small>
-                  </div>
-                  <div className="result-main">
-                    <div className="result-meta">
-                      <span>{formatDate(result.date)}</span>
-                      {result.repository && <span>{result.repository}</span>}
-                      <span>Matched: {result.matched_query}</span>
-                    </div>
-                    <h3>{result.title || "Untitled publication"}</h3>
-                    {!!result.authors?.length && (
-                      <div className="authors">{result.authors.slice(0, 4).join(", ")}</div>
-                    )}
-                    {result.abstract && <p>{result.abstract}</p>}
-                    <div className="boosts">
-                      <span>Similarity {formatScore(result.cosine_similarity)}</span>
-                      <span>Topic {formatScore(result.topic_boost)}</span>
-                      <span>Coverage {formatScore(result.coverage_boost)}</span>
-                    </div>
-                  </div>
-                  {result.source_url && (
-                    <a className="open-link" href={result.source_url} target="_blank" rel="noreferrer" title="Open source">
-                      <ArrowUpRight aria-hidden="true" size={18} />
-                    </a>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+        <ResultsPanel
+          error={error}
+          loading={loading}
+          searchPayload={searchPayload}
+          yearLabel={yearLabel}
+        />
       </section>
     </main>
   );
