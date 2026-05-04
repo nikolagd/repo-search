@@ -6,6 +6,21 @@ class SearchRequest(BaseModel):
     limit: int = Field(10, ge=1, le=50)
 
 
+class AdminCredentials(BaseModel):
+    username: str = Field(..., min_length=3, max_length=80)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class AdminUserResponse(BaseModel):
+    id: int
+    username: str
+
+
+class AuthResponse(BaseModel):
+    expires_in: int
+    admin: AdminUserResponse
+
+
 class HealthResponse(BaseModel):
     status: str
     database: str
@@ -17,6 +32,24 @@ class RepositoryResponse(BaseModel):
     oai_endpoint: str
     last_harvest: str | None
     refresh_interval: int | None
+
+
+class HarvestJobResponse(BaseModel):
+    repository_id: int | None = None
+    status: str
+    started_at: str | None
+    finished_at: str | None
+    processed_records: int | None
+    message: str
+
+
+class AdminRepositoryResponse(RepositoryResponse):
+    harvest_job: HarvestJobResponse | None
+
+
+class EmbeddingStatusResponse(BaseModel):
+    missing_embeddings: int
+    embedding_job: HarvestJobResponse | None
 
 
 class StatsResponse(BaseModel):

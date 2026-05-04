@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchJson } from "./api/client";
+import AdminPanel from "./components/AdminPanel";
 import OverviewStats from "./components/OverviewStats";
 import ResultsPanel from "./components/ResultsPanel";
 import SearchPanel from "./components/SearchPanel";
@@ -8,6 +9,7 @@ import Topbar from "./components/Topbar";
 import { EXAMPLE_QUERIES } from "./constants/searchExamples";
 
 export default function App() {
+  const [activeView, setActiveView] = useState("search");
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
   const [limit, setLimit] = useState(10);
   const [health, setHealth] = useState(null);
@@ -94,28 +96,32 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <Topbar health={health} />
+      <Topbar activeView={activeView} health={health} onViewChange={setActiveView} />
 
       <OverviewStats stats={stats} repositories={repositories} />
 
-      <section className="workspace">
-        <SearchPanel
-          examples={EXAMPLE_QUERIES}
-          limit={limit}
-          loading={loading}
-          onLimitChange={setLimit}
-          onQueryChange={setQuery}
-          onSubmit={submitSearch}
-          query={query}
-        />
+      {activeView === "search" ? (
+        <section className="workspace">
+          <SearchPanel
+            examples={EXAMPLE_QUERIES}
+            limit={limit}
+            loading={loading}
+            onLimitChange={setLimit}
+            onQueryChange={setQuery}
+            onSubmit={submitSearch}
+            query={query}
+          />
 
-        <ResultsPanel
-          error={error}
-          loading={loading}
-          searchPayload={searchPayload}
-          yearLabel={yearLabel}
-        />
-      </section>
+          <ResultsPanel
+            error={error}
+            loading={loading}
+            searchPayload={searchPayload}
+            yearLabel={yearLabel}
+          />
+        </section>
+      ) : (
+        <AdminPanel />
+      )}
     </main>
   );
 }

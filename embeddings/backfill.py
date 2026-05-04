@@ -2,20 +2,19 @@ from embeddings.model import build_document_text, model
 from etl.db import get_connection, update_embedding
 
 
-def main():
-    conn = get_connection()
-
+def fetch_missing_publications(conn):
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, title, abstract
             FROM publication
             WHERE embedding IS NULL
         """)
-        rows = cur.fetchall()
+        return cur.fetchall()
 
-    print(f"Found {len(rows)} records to embed")
 
-    # priprema batcha
+def embed_missing_publications(conn, batch_size=32, show_progress_bar=True):
+    rows = fetch_missing_publications(conn)
+
     ids = []
     texts = []
 
@@ -24,20 +23,34 @@ def main():
         ids.append(pub_id)
         texts.append(text)
 
-    # batchevi 
+    if not texts:
+        return 0
+
     embeddings = model.encode(
         texts,
-        batch_size=32,
+        batch_size=batch_size,
         normalize_embeddings=True,
-        show_progress_bar=True
+        show_progress_bar=show_progress_bar
     )
 
-    # cuvanje rezultata
     for pub_id, embedding in zip(ids, embeddings):
         update_embedding(conn, pub_id, embedding.tolist())
 
-    conn.close()
+    return len(ids)
+
+
+def main():
+    conn = get_connection()
+
+    try:
+        rows = fetch_missing_publications(conn)
+        print(f"Found {len(rows)} records to embed")
+        embedded_count = embed_missing_publications(conn)
+    finally:
+        conn.close()
+
     print("Done.")
+    print(f"Embedded records: {embedded_count}")
 
 
 if __name__ == "__main__":

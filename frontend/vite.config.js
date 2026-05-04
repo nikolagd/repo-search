@@ -30,9 +30,9 @@ function parseEnvValue(filePath, key) {
   return "";
 }
 
-function readApiToken() {
-  if (process.env.API_TOKEN) {
-    return process.env.API_TOKEN;
+function readRootEnvValue(key) {
+  if (process.env[key]) {
+    return process.env[key];
   }
 
   const candidates = [
@@ -41,17 +41,18 @@ function readApiToken() {
   ];
 
   for (const filePath of candidates) {
-    const token = parseEnvValue(filePath, "API_TOKEN");
+    const value = parseEnvValue(filePath, key);
 
-    if (token) {
-      return token;
+    if (value) {
+      return value;
     }
   }
 
   return "";
 }
 
-const apiToken = readApiToken();
+const apiToken = readRootEnvValue("API_TOKEN");
+const apiProxyTarget = readRootEnvValue("API_PROXY_TARGET") || "http://127.0.0.1:8010";
 
 export default defineConfig({
   plugins: [react()],
@@ -59,7 +60,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8010",
+        target: apiProxyTarget,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on("proxyReq", (proxyReq) => {

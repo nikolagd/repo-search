@@ -1,7 +1,11 @@
 export async function fetchJson(url, options) {
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options?.headers || {}),
+    },
   });
 
   const payload = await response.json().catch(() => ({}));

@@ -29,6 +29,9 @@ U njemu definisati konekciju ka bazi i oai endpoint.
 dobija token direktno; Vite ga cita sa serverske strane iz `.env` fajla i dodaje
 `X-API-Key` samo kada proxy prosledjuje `/api` zahteve ka FastAPI-ju.
 
+Za admin login potrebno je dodati i `ADMIN_JWT_SECRET`. To je odvojena tajna
+koja se koristi za potpisivanje JWT tokena posle login-a.
+
 
 Pokretanje iz komandne linije sa:
 ```bash
@@ -80,13 +83,21 @@ Glavne rute:
 - `GET /api/stats` - osnovna statistika nad repozitorijumima i publikacijama
 - `GET /api/repositories` - lista registrovanih OAI repozitorijuma
 - `POST /api/search` - parsiranje prirodnog upita i semanticka pretraga
+- `POST /api/auth/register` - registracija admin naloga
+- `POST /api/auth/login` - admin login, vraca JWT token
+- `GET /api/admin/repositories` - admin lista repozitorijuma sa harvest statusom
+- `POST /api/admin/repositories/{repo_id}/harvest` - pokretanje harvest-a za repozitorijum
+- `GET /api/admin/embeddings` - broj publikacija kojima nedostaje embedding
+- `POST /api/admin/embeddings/backfill` - pokretanje embedding backfill procesa
 
 ### Frontend
 
 Frontend je React aplikacija u `frontend/` direktorijumu. Tokom razvoja Vite
-prosledjuje sve `/api` pozive ka FastAPI serveru na `http://127.0.0.1:8000` i
+prosledjuje sve `/api` pozive ka FastAPI serveru koji je definisan kroz
+`API_PROXY_TARGET` u root `.env` fajlu i
 dodaje `X-API-Key` header iz root `.env` fajla. Token se ne ubacuje u browser
-bundle.
+bundle. Admin login koristi JWT token u `HttpOnly` cookie-ju, tako da ga React
+kod ne moze procitati iz browser JavaScript-a.
 
 Pokretanje:
 
