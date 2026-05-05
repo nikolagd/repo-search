@@ -13,8 +13,8 @@ export default function AdminPanel() {
   const [repositories, setRepositories] = useState([]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [adminError, setAdminError] = useState("");
 
   const hasRunningHarvest = useMemo(
     () => repositories.some((repository) => repository.harvest_job?.status === "running"),
@@ -26,6 +26,7 @@ export default function AdminPanel() {
     setAdmin(null);
     setRepositories([]);
     setEmbeddingStatus(null);
+    setAdminError("");
   }, []);
 
   const loadAdminData = useCallback(async () => {
@@ -80,8 +81,8 @@ export default function AdminPanel() {
   async function submitAuth(event) {
     event.preventDefault();
     setLoading(true);
-    setError("");
-    setMessage("");
+    setAuthError("");
+    setAdminError("");
 
     try {
       const payload = await fetchJson(`/api/auth/${mode}`, {
@@ -91,46 +92,44 @@ export default function AdminPanel() {
 
       setAdmin(payload.admin);
       setPassword("");
-      setMessage(mode === "register" ? "Admin account created." : "Logged in.");
       await loadAdminData();
     } catch (err) {
-      setError(err.message);
+      setAuthError(err.message);
     } finally {
       setLoading(false);
     }
   }
 
   async function refreshRepository(repositoryId) {
-    setError("");
-    setMessage("");
+    setAdminError("");
 
     try {
       await fetchJson(`/api/admin/repositories/${repositoryId}/harvest`, {
         method: "POST",
       });
-      setMessage("Harvest started.");
       await loadAdminData();
     } catch (err) {
-      setError(err.message);
+      setAdminError(err.message);
     }
   }
 
   async function embedMissingPublications() {
-    setError("");
-    setMessage("");
+    setAdminError("");
 
     try {
       await fetchJson("/api/admin/embeddings/backfill", {
         method: "POST",
       });
-      setMessage("Embedding backfill started.");
       await loadAdminData();
     } catch (err) {
-      setError(err.message);
+      setAdminError(err.message);
     }
   }
 
   async function logout() {
+    setAuthError("");
+    setAdminError("");
+
     try {
       await fetchJson("/api/auth/logout", {
         method: "POST",
@@ -180,8 +179,7 @@ export default function AdminPanel() {
             onChange={(event) => setPassword(event.target.value)}
           />
 
-          {error && <div className="admin-message error">{error}</div>}
-          {message && <div className="admin-message">{message}</div>}
+          {authError && <div className="admin-message error">{authError}</div>}
 
           <button className="primary-action" type="submit" disabled={loading || !username.trim() || password.length < 8}>
             {mode === "login" ? <Shield aria-hidden="true" size={18} /> : <UserPlus aria-hidden="true" size={18} />}
@@ -193,8 +191,7 @@ export default function AdminPanel() {
             type="button"
             onClick={() => {
               setMode(mode === "login" ? "register" : "login");
-              setError("");
-              setMessage("");
+              setAuthError("");
             }}
           >
             {mode === "login" ? "Initial admin setup" : "Use existing account"}
@@ -219,8 +216,7 @@ export default function AdminPanel() {
         </div>
       </div>
 
-      {error && <div className="admin-message error">{error}</div>}
-      {message && <div className="admin-message">{message}</div>}
+      {adminError && <div className="admin-message error">{adminError}</div>}
 
       <article className="admin-tool-panel">
         <div className="admin-repository-main">
