@@ -2,8 +2,14 @@ import { Activity, Database, RefreshCw, Search } from "lucide-react";
 
 import { formatDate } from "../utils/format";
 import Stat from "./Stat";
+import type { RepositoryResponse, StatsResponse } from "../types";
 
-export default function OverviewStats({ stats, repositories }) {
+interface OverviewStatsProps {
+  stats: StatsResponse | null;
+  repositories: RepositoryResponse[];
+}
+
+export default function OverviewStats({ stats, repositories }: OverviewStatsProps) {
   return (
     <section className="overview">
       <Stat icon={Database} label="Repositories" value={stats?.repositories ?? repositories.length ?? "-"} />

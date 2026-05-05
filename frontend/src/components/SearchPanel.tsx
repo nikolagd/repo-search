@@ -1,4 +1,15 @@
+import type { FormEvent } from "react";
 import { RefreshCw, Search } from "lucide-react";
+
+interface SearchPanelProps {
+  examples: string[];
+  limit: number;
+  loading: boolean;
+  onLimitChange: (limit: number) => void;
+  onQueryChange: (query: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  query: string;
+}
 
 export default function SearchPanel({
   examples,
@@ -8,7 +19,7 @@ export default function SearchPanel({
   onQueryChange,
   onSubmit,
   query,
-}) {
+}: SearchPanelProps) {
   return (
     <form className="search-panel" onSubmit={onSubmit}>
       <label htmlFor="query">Search query</label>

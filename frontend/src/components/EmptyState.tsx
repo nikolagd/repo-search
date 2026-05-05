@@ -1,6 +1,11 @@
 import { AlertCircle, RefreshCw, Search } from "lucide-react";
 
-export default function EmptyState({ loading, error }) {
+interface EmptyStateProps {
+  loading: boolean;
+  error: string;
+}
+
+export default function EmptyState({ loading, error }: EmptyStateProps) {
   if (loading) {
     return (
       <div className="empty-state">

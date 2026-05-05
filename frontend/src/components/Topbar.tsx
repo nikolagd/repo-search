@@ -1,6 +1,13 @@
 import { Search, Server, Shield } from "lucide-react";
+import type { HealthResponse, ViewMode } from "../types";
 
-export default function Topbar({ activeView, health, onViewChange }) {
+interface TopbarProps {
+  activeView: ViewMode;
+  health: HealthResponse | null;
+  onViewChange: (view: ViewMode) => void;
+}
+
+export default function Topbar({ activeView, health, onViewChange }: TopbarProps) {
   return (
     <header className="topbar">
       <div>

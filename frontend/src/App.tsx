@@ -1,21 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { fetchJson } from "./api/client";
+import { fetchJson, getErrorMessage } from "./api/client";
 import AdminPanel from "./components/AdminPanel";
 import OverviewStats from "./components/OverviewStats";
 import ResultsPanel from "./components/ResultsPanel";
 import SearchPanel from "./components/SearchPanel";
 import Topbar from "./components/Topbar";
 import { EXAMPLE_QUERIES } from "./constants/searchExamples";
+import type { HealthResponse, RepositoryResponse, SearchResponse, StatsResponse, ViewMode } from "./types";
 
 export default function App() {
-  const [activeView, setActiveView] = useState("search");
+  const [activeView, setActiveView] = useState<ViewMode>(() => {
+    const savedView = window.localStorage.getItem("repo-search-active-view");
+    return savedView === "admin" ? "admin" : "search";
+  });
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
   const [limit, setLimit] = useState(10);
-  const [health, setHealth] = useState(null);
-  const [stats, setStats] = useState(null);
-  const [repositories, setRepositories] = useState([]);
-  const [searchPayload, setSearchPayload] = useState(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [repositories, setRepositories] = useState<RepositoryResponse[]>([]);
+  const [searchPayload, setSearchPayload] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -41,53 +45,53 @@ export default function App() {
     return "Any year";
   }, [searchPayload]);
 
-  useEffect(() => {
-    let ignore = false;
+  const loadOverview = useCallback(async () => {
+    const [healthData, statsData, repoData] = await Promise.allSettled([
+      fetchJson<HealthResponse>("/api/health"),
+      fetchJson<StatsResponse>("/api/stats"),
+      fetchJson<RepositoryResponse[]>("/api/repositories"),
+    ]);
 
-    async function loadOverview() {
-      const [healthData, statsData, repoData] = await Promise.allSettled([
-        fetchJson("/api/health"),
-        fetchJson("/api/stats"),
-        fetchJson("/api/repositories"),
-      ]);
-
-      if (ignore) {
-        return;
-      }
-
-      if (healthData.status === "fulfilled") {
-        setHealth(healthData.value);
-      }
-
-      if (statsData.status === "fulfilled") {
-        setStats(statsData.value);
-      }
-
-      if (repoData.status === "fulfilled") {
-        setRepositories(repoData.value);
-      }
+    if (healthData.status === "fulfilled") {
+      setHealth(healthData.value);
     }
 
-    loadOverview();
-    return () => {
-      ignore = true;
-    };
+    if (statsData.status === "fulfilled") {
+      setStats(statsData.value);
+    }
+
+    if (repoData.status === "fulfilled") {
+      setRepositories(repoData.value);
+    }
   }, []);
 
-  async function submitSearch(event) {
+  useEffect(() => {
+    loadOverview();
+  }, [loadOverview]);
+
+  function changeActiveView(view: ViewMode) {
+    setActiveView(view);
+    window.localStorage.setItem("repo-search-active-view", view);
+  }
+
+  useEffect(() => {
+    window.localStorage.setItem("repo-search-active-view", activeView);
+  }, [activeView]);
+
+  async function submitSearch(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
 
     setLoading(true);
     setError("");
 
     try {
-      const payload = await fetchJson("/api/search", {
+      const payload = await fetchJson<SearchResponse>("/api/search", {
         method: "POST",
         body: JSON.stringify({ query, limit }),
       });
       setSearchPayload(payload);
     } catch (err) {
-      setError(err.message);
+      setError(getErrorMessage(err, "Search failed"));
       setSearchPayload(null);
     } finally {
       setLoading(false);
@@ -96,7 +100,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <Topbar activeView={activeView} health={health} onViewChange={setActiveView} />
+      <Topbar activeView={activeView} health={health} onViewChange={changeActiveView} />
 
       <OverviewStats stats={stats} repositories={repositories} />
 
@@ -120,7 +124,7 @@ export default function App() {
           />
         </section>
       ) : (
-        <AdminPanel />
+        <AdminPanel onOverviewRefresh={loadOverview} />
       )}
     </main>
   );

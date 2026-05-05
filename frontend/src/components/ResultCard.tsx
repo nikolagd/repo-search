@@ -1,8 +1,13 @@
 import { ArrowUpRight } from "lucide-react";
 
+import type { SearchResult } from "../types";
 import { formatDate, formatScore } from "../utils/format";
 
-export default function ResultCard({ result }) {
+interface ResultCardProps {
+  result: SearchResult;
+}
+
+export default function ResultCard({ result }: ResultCardProps) {
   return (
     <article className="result-card">
       <div className="result-score">

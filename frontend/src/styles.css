@@ -453,6 +453,7 @@ input:focus {
 
 .admin-auth-panel,
 .admin-repository,
+.repository-form,
 .admin-tool-panel {
   border: 1px solid #dce2ea;
   border-radius: 8px;
@@ -507,6 +508,35 @@ input:focus {
   color: #b42318;
 }
 
+.repository-form {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.repository-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.repository-form-grid {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: center;
+}
+
+.repository-form-grid label {
+  color: #344054;
+  font-weight: 800;
+}
+
+.repository-save-action {
+  width: fit-content;
+}
+
 .admin-repository-list {
   display: grid;
   gap: 12px;
@@ -538,8 +568,17 @@ input:focus {
   overflow-wrap: anywhere;
 }
 
+.admin-repository-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .harvest-status {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
   width: fit-content;
   max-width: 100%;
   border-radius: 999px;
@@ -548,6 +587,25 @@ input:focus {
   padding: 5px 9px;
   font-size: 0.82rem;
   font-weight: 800;
+}
+
+.status-dismiss {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+  opacity: 0.78;
+}
+
+.status-dismiss:hover {
+  background: rgb(0 0 0 / 8%);
+  opacity: 1;
 }
 
 .harvest-status.running {
@@ -591,6 +649,10 @@ input:focus {
 
   .search-panel {
     position: static;
+  }
+
+  .repository-form-grid {
+    grid-template-columns: 1fr;
   }
 }
 

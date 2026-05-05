@@ -1,7 +1,15 @@
 import EmptyState from "./EmptyState";
 import ResultCard from "./ResultCard";
+import type { SearchResponse } from "../types";
 
-export default function ResultsPanel({ error, loading, searchPayload, yearLabel }) {
+interface ResultsPanelProps {
+  error: string;
+  loading: boolean;
+  searchPayload: SearchResponse | null;
+  yearLabel: string;
+}
+
+export default function ResultsPanel({ error, loading, searchPayload, yearLabel }: ResultsPanelProps) {
   const results = searchPayload?.results ?? [];
   const resultCount = results.length;
 

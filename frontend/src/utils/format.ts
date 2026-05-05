@@ -1,4 +1,4 @@
-export function formatDate(value) {
+export function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "No date";
   }
@@ -10,6 +10,6 @@ export function formatDate(value) {
   }).format(new Date(value));
 }
 
-export function formatScore(value) {
+export function formatScore(value: number | null | undefined): string {
   return Number(value || 0).toFixed(3);
 }
