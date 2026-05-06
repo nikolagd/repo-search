@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 import psycopg2
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Response
@@ -11,15 +12,20 @@ from api.admin_auth import (
     create_admin_user,
     has_admin_users,
     require_admin_user,
+    require_csrf_token,
     set_admin_cookie,
+    set_csrf_cookie,
 )
 from api.auth import require_api_token
 from api.admin_jobs import (
+    acknowledge_job,
+    fail_interrupted_jobs,
     get_embedding_status,
     list_admin_repositories,
     queue_embedding_backfill,
     queue_repository_harvest,
 )
+from api.admin_repositories import create_admin_repository, update_admin_repository
 from api.schemas import (
     AdminCredentials,
     AdminRepositoryResponse,
@@ -29,10 +35,34 @@ from api.schemas import (
     HarvestJobResponse,
     HealthResponse,
     RepositoryResponse,
+    RepositoryWriteRequest,
     SearchRequest,
     StatsResponse,
 )
 from api.services import check_database, get_repositories, get_stats, run_search
+
+
+def should_run_db_migrations_on_startup() -> bool:
+    return os.getenv("RUN_DB_MIGRATIONS_ON_STARTUP", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if should_run_db_migrations_on_startup():
+        from etl.migrate import migrate
+
+        migrate()
+
+    try:
+        fail_interrupted_jobs()
+    except Exception as exc:
+        print(f"Could not mark interrupted admin jobs: {exc}")
+
+    yield
 
 
 def parse_origins() -> list[str]:
@@ -46,6 +76,7 @@ def parse_origins() -> list[str]:
 app = FastAPI(
     title="Repo Search API",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -158,11 +189,12 @@ def login(request: AdminCredentials, response: Response) -> AuthResponse:
 
 
 @api_router.get("/auth/me", response_model=AdminUserResponse)
-def me(admin_user: dict = Depends(require_admin_user)) -> AdminUserResponse:
+def me(response: Response, admin_user: dict = Depends(require_admin_user)) -> AdminUserResponse:
+    set_csrf_cookie(response)
     return AdminUserResponse(**admin_user)
 
 
-@api_router.post("/auth/logout")
+@api_router.post("/auth/logout", dependencies=[Depends(require_csrf_token)])
 def logout(response: Response) -> dict:
     clear_admin_cookie(response)
     return {"status": "ok"}
@@ -173,7 +205,54 @@ def admin_repositories() -> list[AdminRepositoryResponse]:
     return [AdminRepositoryResponse(**repo) for repo in list_admin_repositories()]
 
 
-@admin_router.post("/repositories/{repo_id}/harvest", response_model=HarvestJobResponse)
+@admin_router.post(
+    "/repositories",
+    response_model=RepositoryResponse,
+    dependencies=[Depends(require_csrf_token)],
+)
+def create_repository_admin(request: RepositoryWriteRequest) -> RepositoryResponse:
+    try:
+        return RepositoryResponse(**create_admin_repository(
+            name=request.name,
+            oai_endpoint=request.oai_endpoint,
+            refresh_interval=request.refresh_interval,
+        ))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Repository creation failed.",
+        ) from exc
+
+
+@admin_router.put(
+    "/repositories/{repo_id}",
+    response_model=RepositoryResponse,
+    dependencies=[Depends(require_csrf_token)],
+)
+def update_repository_admin(repo_id: int, request: RepositoryWriteRequest) -> RepositoryResponse:
+    try:
+        return RepositoryResponse(**update_admin_repository(
+            repo_id=repo_id,
+            name=request.name,
+            oai_endpoint=request.oai_endpoint,
+            refresh_interval=request.refresh_interval,
+        ))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Repository update failed.",
+        ) from exc
+
+
+@admin_router.post(
+    "/repositories/{repo_id}/harvest",
+    response_model=HarvestJobResponse,
+    dependencies=[Depends(require_csrf_token)],
+)
 def harvest_repository_admin(repo_id: int, background_tasks: BackgroundTasks) -> HarvestJobResponse:
     return HarvestJobResponse(**queue_repository_harvest(repo_id, background_tasks))
 
@@ -183,7 +262,27 @@ def embedding_status() -> EmbeddingStatusResponse:
     return EmbeddingStatusResponse(**get_embedding_status())
 
 
-@admin_router.post("/embeddings/backfill", response_model=HarvestJobResponse)
+@admin_router.post(
+    "/jobs/{job_id}/acknowledge",
+    dependencies=[Depends(require_csrf_token)],
+)
+def acknowledge_admin_job(job_id: int) -> dict[str, str]:
+    try:
+        return acknowledge_job(job_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Job acknowledgement failed.",
+        ) from exc
+
+
+@admin_router.post(
+    "/embeddings/backfill",
+    response_model=HarvestJobResponse,
+    dependencies=[Depends(require_csrf_token)],
+)
 def embedding_backfill(background_tasks: BackgroundTasks) -> HarvestJobResponse:
     return HarvestJobResponse(**queue_embedding_backfill(background_tasks))
 

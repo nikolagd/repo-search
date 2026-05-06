@@ -72,6 +72,33 @@ def list_metadata_formats(base_url=None) -> list[str]:
     ]
 
 
+def identify_repository(base_url=None) -> dict[str, str | None]:
+    params = {
+        "verb": "Identify",
+    }
+    root = ET.fromstring(request_oai(params, base_url=base_url))
+    identify = root.find(".//oai:Identify", NS)
+
+    if identify is None:
+        raise OAIClientError("OAI Identify response did not include an Identify element.")
+
+    def get_text(tag: str) -> str | None:
+        element = identify.find(f"oai:{tag}", NS)
+        return element.text.strip() if element is not None and element.text else None
+
+    return {
+        "repository_name": get_text("repositoryName"),
+        "base_url": get_text("baseURL"),
+        "earliest_datestamp": get_text("earliestDatestamp"),
+        "deleted_record": get_text("deletedRecord"),
+        "granularity": get_text("granularity"),
+    }
+
+
+def get_granularity(base_url=None) -> str:
+    return identify_repository(base_url=base_url).get("granularity") or "YYYY-MM-DD"
+
+
 def choose_metadata_prefix(base_url=None) -> str:
     configured_prefix = (METADATA_PREFIX or "auto").strip()
 

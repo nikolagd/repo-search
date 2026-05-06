@@ -34,7 +34,15 @@ class RepositoryResponse(BaseModel):
     refresh_interval: int | None
 
 
+class RepositoryWriteRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    oai_endpoint: str = Field(..., min_length=1, max_length=1000)
+    refresh_interval: int | None = Field(default=None, ge=1, le=525600)
+
+
 class HarvestJobResponse(BaseModel):
+    id: int | None = None
+    job_type: str | None = None
     repository_id: int | None = None
     status: str
     started_at: str | None

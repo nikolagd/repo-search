@@ -3,27 +3,45 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import jwt
 from dotenv import load_dotenv
-from fastapi import Cookie, HTTPException, Response, status
+from fastapi import Depends, Header, HTTPException, Response, status
+from fastapi.security import APIKeyCookie
 
 from etl.db import get_connection
 
 load_dotenv()
 
 ADMIN_COOKIE_NAME = "repo_search_admin"
+CSRF_COOKIE_NAME = "repo_search_admin_csrf"
+CSRF_HEADER_NAME = "X-CSRF-Token"
+ADMIN_COOKIE_PATH = "/api"
+CSRF_COOKIE_PATH = "/"
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRY_MINUTES", "120"))
+JWT_ROTATION_INTERVAL_MINUTES = int(os.getenv("ADMIN_JWT_ROTATION_INTERVAL_MINUTES", "15"))
+JWT_MAX_SESSION_MINUTES = int(os.getenv("ADMIN_JWT_MAX_SESSION_MINUTES", "720"))
 PASSWORD_ITERATIONS = 210_000
+
+admin_cookie_scheme = APIKeyCookie(name=ADMIN_COOKIE_NAME, auto_error=False)
+csrf_cookie_scheme = APIKeyCookie(name=CSRF_COOKIE_NAME, auto_error=False)
 
 
 def get_jwt_secret() -> str:
-    return os.getenv("ADMIN_JWT_SECRET", "").strip()
+    secret = os.getenv("ADMIN_JWT_SECRET", "").strip()
+
+    if secret and len(secret.encode("utf-8")) < 32:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ADMIN_JWT_SECRET must be at least 32 bytes.",
+        )
+
+    return secret
 
 
 def ensure_admin_schema() -> None:
@@ -159,16 +177,24 @@ def authenticate_admin_user(username: str, password: str) -> dict[str, Any] | No
     }
 
 
-def base64url_encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+def utc_from_claim(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid admin token timestamp.",
+    )
 
 
-def base64url_decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
+def get_session_started_at(payload: dict[str, Any]) -> datetime:
+    return utc_from_claim(payload.get("session_started_at", payload["iat"]))
 
 
-def create_access_token(admin_user: dict[str, Any]) -> str:
+def build_access_token(admin_user: dict[str, Any], session_started_at: datetime | None = None) -> tuple[str, int]:
     secret = get_jwt_secret()
 
     if not secret:
@@ -178,25 +204,34 @@ def create_access_token(admin_user: dict[str, Any]) -> str:
         )
 
     now = datetime.now(timezone.utc)
+    session_started_at = session_started_at or now
+    expires_at = now + timedelta(minutes=JWT_EXPIRY_MINUTES)
+
+    if JWT_MAX_SESSION_MINUTES > 0:
+        max_session_expires_at = session_started_at + timedelta(minutes=JWT_MAX_SESSION_MINUTES)
+        expires_at = min(expires_at, max_session_expires_at)
+
+    max_age = int((expires_at - now).total_seconds())
+
+    if max_age <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin session expired.",
+        )
+
     payload = {
         "sub": admin_user["username"],
         "uid": admin_user["id"],
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=JWT_EXPIRY_MINUTES)).timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "session_started_at": int(session_started_at.timestamp()),
     }
-    header = {"alg": JWT_ALGORITHM, "typ": "JWT"}
-    signing_input = ".".join(
-        [
-            base64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8")),
-            base64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8")),
-        ]
-    )
-    signature = hmac.new(
-        secret.encode("utf-8"),
-        signing_input.encode("ascii"),
-        hashlib.sha256,
-    ).digest()
-    return f"{signing_input}.{base64url_encode(signature)}"
+    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM), max_age
+
+
+def create_access_token(admin_user: dict[str, Any], session_started_at: datetime | None = None) -> str:
+    token, _ = build_access_token(admin_user, session_started_at=session_started_at)
+    return token
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -209,28 +244,13 @@ def decode_access_token(token: str) -> dict[str, Any]:
         )
 
     try:
-        header_b64, payload_b64, signature_b64 = token.split(".", 2)
-        signing_input = f"{header_b64}.{payload_b64}"
-        expected_signature = hmac.new(
-            secret.encode("utf-8"),
-            signing_input.encode("ascii"),
-            hashlib.sha256,
-        ).digest()
-
-        if not hmac.compare_digest(base64url_decode(signature_b64), expected_signature):
-            raise ValueError("Invalid token signature.")
-
-        header = json.loads(base64url_decode(header_b64))
-        payload = json.loads(base64url_decode(payload_b64))
-
-        if header.get("alg") != JWT_ALGORITHM:
-            raise ValueError("Unsupported token algorithm.")
-
-        if int(payload.get("exp", 0)) < int(datetime.now(timezone.utc).timestamp()):
-            raise ValueError("Token expired.")
-
-        return payload
-    except Exception as exc:
+        return jwt.decode(
+            token,
+            secret,
+            algorithms=[JWT_ALGORITHM],
+            options={"require": ["sub", "uid", "iat", "exp"]},
+        )
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired admin token.",
@@ -238,7 +258,8 @@ def decode_access_token(token: str) -> dict[str, Any]:
 
 
 def require_admin_user(
-    token: str | None = Cookie(default=None, alias=ADMIN_COOKIE_NAME),
+    response: Response,
+    token: str | None = Depends(admin_cookie_scheme),
 ) -> dict[str, Any]:
     if not token:
         raise HTTPException(
@@ -247,31 +268,119 @@ def require_admin_user(
         )
 
     payload = decode_access_token(token)
-    return {
+    admin_user = {
         "id": payload["uid"],
         "username": payload["sub"],
     }
 
+    rotate_admin_cookie_if_needed(response, admin_user, payload)
+    return admin_user
 
-def set_admin_cookie(response: Response, admin_user: dict[str, Any]) -> None:
+
+def should_rotate_access_token(payload: dict[str, Any]) -> bool:
+    if JWT_ROTATION_INTERVAL_MINUTES <= 0:
+        return False
+
+    issued_at = utc_from_claim(payload["iat"])
+    rotate_after = issued_at + timedelta(minutes=JWT_ROTATION_INTERVAL_MINUTES)
+    return datetime.now(timezone.utc) >= rotate_after
+
+
+def rotate_admin_cookie_if_needed(
+    response: Response,
+    admin_user: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    if not should_rotate_access_token(payload):
+        return
+
+    set_admin_cookie(
+        response,
+        admin_user,
+        session_started_at=get_session_started_at(payload),
+    )
+
+
+def require_csrf_token(
+    csrf_cookie: str | None = Depends(csrf_cookie_scheme),
+    csrf_header: str | None = Header(default=None, alias=CSRF_HEADER_NAME),
+) -> None:
+    if not csrf_cookie or not csrf_header:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing CSRF token.",
+        )
+
+    if not hmac.compare_digest(csrf_cookie, csrf_header):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid CSRF token.",
+        )
+
+
+def use_secure_admin_cookie() -> bool:
+    return os.getenv("ADMIN_COOKIE_SECURE", "false").lower() == "true"
+
+
+def set_admin_cookie(
+    response: Response,
+    admin_user: dict[str, Any],
+    session_started_at: datetime | None = None,
+) -> None:
+    token, max_age = build_access_token(admin_user, session_started_at=session_started_at)
+    secure = use_secure_admin_cookie()
+
     response.set_cookie(
         key=ADMIN_COOKIE_NAME,
-        value=create_access_token(admin_user),
-        max_age=JWT_EXPIRY_MINUTES * 60,
+        value=token,
+        max_age=max_age,
         httponly=True,
         samesite="lax",
-        secure=os.getenv("ADMIN_COOKIE_SECURE", "false").lower() == "true",
-        path="/api",
+        secure=secure,
+        path=ADMIN_COOKIE_PATH,
+    )
+
+    set_csrf_cookie(response, max_age=max_age)
+
+
+def set_csrf_cookie(response: Response, max_age: int | None = None) -> None:
+    max_age = max_age or JWT_EXPIRY_MINUTES * 60
+    secure = use_secure_admin_cookie()
+
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=secrets.token_urlsafe(32),
+        max_age=max_age,
+        httponly=False,
+        samesite="lax",
+        secure=secure,
+        path=CSRF_COOKIE_PATH,
     )
 
 
 def clear_admin_cookie(response: Response) -> None:
+    secure = use_secure_admin_cookie()
+
     response.delete_cookie(
         key=ADMIN_COOKIE_NAME,
-        path="/api",
+        path=ADMIN_COOKIE_PATH,
         samesite="lax",
-        secure=os.getenv("ADMIN_COOKIE_SECURE", "false").lower() == "true",
+        secure=secure,
         httponly=True,
+    )
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path=CSRF_COOKIE_PATH,
+        samesite="lax",
+        secure=secure,
+        httponly=False,
+    )
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path=ADMIN_COOKIE_PATH,
+        samesite="lax",
+        secure=secure,
+        httponly=False,
     )
 
 
