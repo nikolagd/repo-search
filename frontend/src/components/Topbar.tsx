@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import { Search, Server, Shield } from "lucide-react";
 import type { HealthResponse, ViewMode } from "../types";
 
@@ -8,6 +9,21 @@ interface TopbarProps {
 }
 
 export default function Topbar({ activeView, health, onViewChange }: TopbarProps) {
+  function handleNavigation(event: MouseEvent<HTMLAnchorElement>, view: ViewMode) {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.shiftKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    onViewChange(view);
+  }
+
   return (
     <header className="topbar">
       <div>
@@ -16,22 +32,22 @@ export default function Topbar({ activeView, health, onViewChange }: TopbarProps
       </div>
       <div className="topbar-actions">
         <div className="view-switch" aria-label="Primary navigation">
-          <button
+          <a
             className={activeView === "search" ? "active" : ""}
-            type="button"
-            onClick={() => onViewChange("search")}
+            href="/search"
+            onClick={(event) => handleNavigation(event, "search")}
           >
             <Search aria-hidden="true" size={16} />
             Search
-          </button>
-          <button
+          </a>
+          <a
             className={activeView === "admin" ? "active" : ""}
-            type="button"
-            onClick={() => onViewChange("admin")}
+            href="/admin"
+            onClick={(event) => handleNavigation(event, "admin")}
           >
             <Shield aria-hidden="true" size={16} />
             Admin
-          </button>
+          </a>
         </div>
         <div className="system-status" title="API and database status">
           <Server aria-hidden="true" size={18} />

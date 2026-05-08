@@ -19,6 +19,7 @@ body {
 }
 
 button,
+a,
 input,
 textarea {
   font: inherit;
@@ -60,7 +61,7 @@ button {
   background: #ffffff;
 }
 
-.view-switch button {
+.view-switch a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -71,9 +72,10 @@ button {
   background: transparent;
   color: #475467;
   font-weight: 800;
+  text-decoration: none;
 }
 
-.view-switch button.active {
+.view-switch a.active {
   background: #0f766e;
   color: #ffffff;
 }

@@ -9,11 +9,16 @@ import Topbar from "./components/Topbar";
 import { EXAMPLE_QUERIES } from "./constants/searchExamples";
 import type { HealthResponse, RepositoryResponse, SearchResponse, StatsResponse, ViewMode } from "./types";
 
+function getViewFromPath(pathname: string): ViewMode {
+  return pathname === "/admin" || pathname.startsWith("/admin/") ? "admin" : "search";
+}
+
+function getPathForView(view: ViewMode): string {
+  return view === "admin" ? "/admin" : "/search";
+}
+
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewMode>(() => {
-    const savedView = window.localStorage.getItem("repo-search-active-view");
-    return savedView === "admin" ? "admin" : "search";
-  });
+  const [activeView, setActiveView] = useState<ViewMode>(() => getViewFromPath(window.location.pathname));
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
   const [limit, setLimit] = useState(10);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -70,13 +75,23 @@ export default function App() {
   }, [loadOverview]);
 
   function changeActiveView(view: ViewMode) {
+    const nextPath = getPathForView(view);
+
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, "", nextPath);
+    }
+
     setActiveView(view);
-    window.localStorage.setItem("repo-search-active-view", view);
   }
 
   useEffect(() => {
-    window.localStorage.setItem("repo-search-active-view", activeView);
-  }, [activeView]);
+    function syncViewWithLocation() {
+      setActiveView(getViewFromPath(window.location.pathname));
+    }
+
+    window.addEventListener("popstate", syncViewWithLocation);
+    return () => window.removeEventListener("popstate", syncViewWithLocation);
+  }, []);
 
   async function submitSearch(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
