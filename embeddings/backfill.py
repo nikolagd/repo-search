@@ -1,5 +1,10 @@
+import os
+
 from embeddings.model import build_document_text, model
 from etl.db import get_connection, update_embedding
+
+
+DEFAULT_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
 
 def fetch_missing_publications(conn):
@@ -12,31 +17,39 @@ def fetch_missing_publications(conn):
         return cur.fetchall()
 
 
-def embed_missing_publications(conn, batch_size=32, show_progress_bar=True):
+def iter_batches(items, batch_size):
+    for index in range(0, len(items), batch_size):
+        yield items[index:index + batch_size]
+
+
+def embed_missing_publications(conn, batch_size=DEFAULT_BATCH_SIZE, show_progress_bar=True):
     rows = fetch_missing_publications(conn)
+    total_embedded = 0
 
-    ids = []
-    texts = []
-
-    for pub_id, title, abstract in rows:
-        text = build_document_text(title, abstract)
-        ids.append(pub_id)
-        texts.append(text)
-
-    if not texts:
+    if not rows:
         return 0
 
-    embeddings = model.encode(
-        texts,
-        batch_size=batch_size,
-        normalize_embeddings=True,
-        show_progress_bar=show_progress_bar
-    )
+    for batch in iter_batches(rows, batch_size):
+        ids = []
+        texts = []
 
-    for pub_id, embedding in zip(ids, embeddings):
-        update_embedding(conn, pub_id, embedding.tolist())
+        for pub_id, title, abstract in batch:
+            text = build_document_text(title, abstract)
+            ids.append(pub_id)
+            texts.append(text)
 
-    return len(ids)
+        embeddings = model.encode(
+            texts,
+            batch_size=batch_size,
+            normalize_embeddings=True,
+            show_progress_bar=show_progress_bar
+        )
+
+        for pub_id, embedding in zip(ids, embeddings):
+            update_embedding(conn, pub_id, embedding.tolist())
+            total_embedded += 1
+
+    return total_embedded
 
 
 def main():

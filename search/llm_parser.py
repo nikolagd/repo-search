@@ -6,9 +6,14 @@ import requests
 LLM_URL = os.getenv("LLM_URL", "http://localhost:11434/api/generate")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
 
-def call_llm_json(prompt: str) -> dict | None:
+def parse_json_response(text: str) -> dict | None:
+    return json.loads(text.strip())
+
+
+def call_ollama_json(prompt: str) -> dict | None:
     response = requests.post(
         LLM_URL,
         json={
@@ -21,7 +26,36 @@ def call_llm_json(prompt: str) -> dict | None:
         timeout=LLM_TIMEOUT,
     )
     response.raise_for_status()
-    return json.loads(response.json().get("response", "").strip())
+    return parse_json_response(response.json().get("response", ""))
+
+
+def call_openai_compatible_json(prompt: str) -> dict | None:
+    response = requests.post(
+        LLM_URL,
+        json={
+            "model": LLM_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        },
+        timeout=LLM_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    content = payload["choices"][0]["message"]["content"]
+    return parse_json_response(content)
+
+
+def call_llm_json(prompt: str) -> dict | None:
+    if LLM_PROVIDER in {"openai", "openai_compatible", "llama_cpp", "llamacpp"}:
+        return call_openai_compatible_json(prompt)
+
+    return call_ollama_json(prompt)
 
 
 def parse_query_llm(query: str) -> dict | None:

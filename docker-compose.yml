@@ -1,0 +1,101 @@
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: ${DB_NAME:-repo_search}
+      POSTGRES_USER: ${DB_USER:-repo_search}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-repo_search_password}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    gpus: all
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-repo_search}
+      DB_USER: ${DB_USER:-repo_search}
+      DB_PASSWORD: ${DB_PASSWORD:-repo_search_password}
+      OAI_BASE_URL: ${OAI_BASE_URL:-https://rfos.fon.bg.ac.rs/oai/request}
+      OAI_METADATA_PREFIX: ${OAI_METADATA_PREFIX:-auto}
+      OAI_REPOSITORY_NAME: ${OAI_REPOSITORY_NAME:-Default OAI repository}
+      OAI_REFRESH_INTERVAL: ${OAI_REFRESH_INTERVAL:-1440}
+      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-local-dev-admin-jwt-secret-change-me-32-bytes}
+      ADMIN_JWT_EXPIRY_MINUTES: ${ADMIN_JWT_EXPIRY_MINUTES:-120}
+      ADMIN_JWT_ROTATION_INTERVAL_MINUTES: ${ADMIN_JWT_ROTATION_INTERVAL_MINUTES:-15}
+      ADMIN_JWT_MAX_SESSION_MINUTES: ${ADMIN_JWT_MAX_SESSION_MINUTES:-720}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
+      ADMIN_JOB_STATUS_HISTORY_MINUTES: ${ADMIN_JOB_STATUS_HISTORY_MINUTES:-60}
+      RUN_DB_MIGRATIONS_ON_STARTUP: ${RUN_DB_MIGRATIONS_ON_STARTUP:-true}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_URL: ${LLM_URL:-http://host.docker.internal:11434/api/generate}
+      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "${API_HOST_PORT:-8010}:8000"
+    volumes:
+      - ./data:/app/data
+      - model_cache:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      API_UPSTREAM: ${API_UPSTREAM:-http://api:8000}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_HOST_PORT:-8080}:80"
+
+  llm:
+    image: ${LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    profiles:
+      - llm
+    gpus: all
+    command:
+      - --model
+      - /models/${LLAMA_CPP_MODEL_FILE:-model.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --ctx-size
+      - "${LLAMA_CPP_CTX_SIZE:-4096}"
+      - --n-gpu-layers
+      - "${LLAMA_CPP_GPU_LAYERS:-999}"
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "${LLAMA_CPP_HOST_PORT:-8081}:8080"
+
+volumes:
+  model_cache:
