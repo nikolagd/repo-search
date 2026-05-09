@@ -11,6 +11,7 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { fetchJson, getErrorMessage } from "../api/client";
 import type {
@@ -26,13 +27,14 @@ import type {
 import { formatDate } from "../utils/format";
 
 interface AdminPanelProps {
+  authMode?: AuthMode;
   onOverviewRefresh: () => Promise<void>;
 }
 
-export default function AdminPanel({ onOverviewRefresh }: AdminPanelProps) {
+export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelProps) {
+  const navigate = useNavigate();
   const [admin, setAdmin] = useState<AdminUser | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [mode, setMode] = useState<AuthMode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [repositories, setRepositories] = useState<AdminRepositoryResponse[]>([]);
@@ -150,7 +152,7 @@ export default function AdminPanel({ onOverviewRefresh }: AdminPanelProps) {
     setAdminError("");
 
     try {
-      const payload = await fetchJson<AuthResponse>(`/api/auth/${mode}`, {
+      const payload = await fetchJson<AuthResponse>(`/api/auth/${authMode}`, {
         method: "POST",
         body: JSON.stringify({ username, password }),
       });
@@ -158,6 +160,7 @@ export default function AdminPanel({ onOverviewRefresh }: AdminPanelProps) {
       setAdmin(payload.admin);
       setPassword("");
       await refreshAdminData();
+      navigate("/admin", { replace: true });
     } catch (err) {
       setAuthError(getErrorMessage(err, "Authentication failed"));
     } finally {
@@ -300,13 +303,17 @@ export default function AdminPanel({ onOverviewRefresh }: AdminPanelProps) {
   }
 
   if (!admin) {
+    if (!authMode) {
+      return <Navigate to="/admin/login" replace />;
+    }
+
     return (
       <section className="admin-shell">
         <form className="admin-auth-panel" onSubmit={submitAuth}>
           <div>
             <span className="eyebrow">Admin</span>
-            <h2>{mode === "login" ? "Log in" : "Register"}</h2>
-            {mode === "register" && (
+            <h2>{authMode === "login" ? "Log in" : "Register"}</h2>
+            {authMode === "register" && (
               <p className="admin-help">Registration is only available while no admin account exists.</p>
             )}
           </div>
@@ -322,7 +329,7 @@ export default function AdminPanel({ onOverviewRefresh }: AdminPanelProps) {
           <label htmlFor="admin-password">Password</label>
           <input
             id="admin-password"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            autoComplete={authMode === "login" ? "current-password" : "new-password"}
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -331,23 +338,20 @@ export default function AdminPanel({ onOverviewRefresh }: AdminPanelProps) {
           {authError && <div className="admin-message error">{authError}</div>}
 
           <button className="primary-action" type="submit" disabled={loading || !username.trim() || password.length < 8}>
-            {mode === "login" ? <Shield aria-hidden="true" size={18} /> : <UserPlus aria-hidden="true" size={18} />}
-            {loading ? "Please wait..." : mode === "login" ? "Log in" : "Register"}
+            {authMode === "login" ? <Shield aria-hidden="true" size={18} /> : <UserPlus aria-hidden="true" size={18} />}
+            {loading ? "Please wait..." : authMode === "login" ? "Log in" : "Register"}
           </button>
 
-          <button
-            className="secondary-action"
-            type="button"
-            onClick={() => {
-              setMode(mode === "login" ? "register" : "login");
-              setAuthError("");
-            }}
-          >
-            {mode === "login" ? "Initial admin setup" : "Use existing account"}
-          </button>
+          <Link className="secondary-action" to={authMode === "login" ? "/admin/register" : "/admin/login"}>
+            {authMode === "login" ? "Initial admin setup" : "Use existing account"}
+          </Link>
         </form>
       </section>
     );
+  }
+
+  if (authMode) {
+    return <Navigate to="/admin" replace />;
   }
 
   return (

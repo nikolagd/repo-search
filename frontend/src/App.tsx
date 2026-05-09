@@ -117,6 +117,8 @@ export default function App() {
         <Route path="/" element={<Navigate to="/search" replace />} />
         <Route path="/search" element={searchPage} />
         <Route path="/admin" element={<AdminPanel onOverviewRefresh={loadOverview} />} />
+        <Route path="/admin/login" element={<AdminPanel authMode="login" onOverviewRefresh={loadOverview} />} />
+        <Route path="/admin/register" element={<AdminPanel authMode="register" onOverviewRefresh={loadOverview} />} />
         <Route path="*" element={<Navigate to="/search" replace />} />
       </Routes>
     </main>

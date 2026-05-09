@@ -147,7 +147,9 @@ Aplikacija je dostupna na `http://127.0.0.1:5173`.
 Frontend koristi `react-router-dom` za glavne stranice:
 
 - `/search` - pretraga
-- `/admin` - admin login i admin dashboard
+- `/admin` - admin dashboard
+- `/admin/login` - admin login
+- `/admin/register` - inicijalna registracija admin naloga
 
 Ove putanje su UI navigacija. Admin zastita je i dalje na FastAPI strani kroz
 `HttpOnly` JWT cookie i CSRF proveru.
