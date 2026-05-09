@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 
 import { fetchJson, getErrorMessage } from "./api/client";
 import AdminPanel from "./components/AdminPanel";
@@ -7,18 +8,9 @@ import ResultsPanel from "./components/ResultsPanel";
 import SearchPanel from "./components/SearchPanel";
 import Topbar from "./components/Topbar";
 import { EXAMPLE_QUERIES } from "./constants/searchExamples";
-import type { HealthResponse, RepositoryResponse, SearchResponse, StatsResponse, ViewMode } from "./types";
-
-function getViewFromPath(pathname: string): ViewMode {
-  return pathname === "/admin" || pathname.startsWith("/admin/") ? "admin" : "search";
-}
-
-function getPathForView(view: ViewMode): string {
-  return view === "admin" ? "/admin" : "/search";
-}
+import type { HealthResponse, RepositoryResponse, SearchResponse, StatsResponse } from "./types";
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewMode>(() => getViewFromPath(window.location.pathname));
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
   const [limit, setLimit] = useState(10);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -74,25 +66,6 @@ export default function App() {
     loadOverview();
   }, [loadOverview]);
 
-  function changeActiveView(view: ViewMode) {
-    const nextPath = getPathForView(view);
-
-    if (window.location.pathname !== nextPath) {
-      window.history.pushState(null, "", nextPath);
-    }
-
-    setActiveView(view);
-  }
-
-  useEffect(() => {
-    function syncViewWithLocation() {
-      setActiveView(getViewFromPath(window.location.pathname));
-    }
-
-    window.addEventListener("popstate", syncViewWithLocation);
-    return () => window.removeEventListener("popstate", syncViewWithLocation);
-  }, []);
-
   async function submitSearch(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
 
@@ -113,34 +86,39 @@ export default function App() {
     }
   }
 
+  const searchPage = (
+    <section className="workspace">
+      <SearchPanel
+        examples={EXAMPLE_QUERIES}
+        limit={limit}
+        loading={loading}
+        onLimitChange={setLimit}
+        onQueryChange={setQuery}
+        onSubmit={submitSearch}
+        query={query}
+      />
+
+      <ResultsPanel
+        error={error}
+        loading={loading}
+        searchPayload={searchPayload}
+        yearLabel={yearLabel}
+      />
+    </section>
+  );
+
   return (
     <main className="app-shell">
-      <Topbar activeView={activeView} health={health} onViewChange={changeActiveView} />
+      <Topbar health={health} />
 
       <OverviewStats stats={stats} repositories={repositories} />
 
-      {activeView === "search" ? (
-        <section className="workspace">
-          <SearchPanel
-            examples={EXAMPLE_QUERIES}
-            limit={limit}
-            loading={loading}
-            onLimitChange={setLimit}
-            onQueryChange={setQuery}
-            onSubmit={submitSearch}
-            query={query}
-          />
-
-          <ResultsPanel
-            error={error}
-            loading={loading}
-            searchPayload={searchPayload}
-            yearLabel={yearLabel}
-          />
-        </section>
-      ) : (
-        <AdminPanel onOverviewRefresh={loadOverview} />
-      )}
+      <Routes>
+        <Route path="/" element={<Navigate to="/search" replace />} />
+        <Route path="/search" element={searchPage} />
+        <Route path="/admin" element={<AdminPanel onOverviewRefresh={loadOverview} />} />
+        <Route path="*" element={<Navigate to="/search" replace />} />
+      </Routes>
     </main>
   );
 }

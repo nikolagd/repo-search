@@ -144,7 +144,7 @@ npm run dev
 ```
 
 Aplikacija je dostupna na `http://127.0.0.1:5173`.
-Frontend koristi browser path za glavne stranice:
+Frontend koristi `react-router-dom` za glavne stranice:
 
 - `/search` - pretraga
 - `/admin` - admin login i admin dashboard

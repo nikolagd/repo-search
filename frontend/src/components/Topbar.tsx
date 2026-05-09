@@ -1,29 +1,12 @@
-import type { MouseEvent } from "react";
 import { Search, Server, Shield } from "lucide-react";
-import type { HealthResponse, ViewMode } from "../types";
+import { NavLink } from "react-router-dom";
+import type { HealthResponse } from "../types";
 
 interface TopbarProps {
-  activeView: ViewMode;
   health: HealthResponse | null;
-  onViewChange: (view: ViewMode) => void;
 }
 
-export default function Topbar({ activeView, health, onViewChange }: TopbarProps) {
-  function handleNavigation(event: MouseEvent<HTMLAnchorElement>, view: ViewMode) {
-    if (
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      event.shiftKey
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    onViewChange(view);
-  }
-
+export default function Topbar({ health }: TopbarProps) {
   return (
     <header className="topbar">
       <div>
@@ -32,22 +15,20 @@ export default function Topbar({ activeView, health, onViewChange }: TopbarProps
       </div>
       <div className="topbar-actions">
         <div className="view-switch" aria-label="Primary navigation">
-          <a
-            className={activeView === "search" ? "active" : ""}
-            href="/search"
-            onClick={(event) => handleNavigation(event, "search")}
+          <NavLink
+            className={({ isActive }) => (isActive ? "active" : "")}
+            to="/search"
           >
             <Search aria-hidden="true" size={16} />
             Search
-          </a>
-          <a
-            className={activeView === "admin" ? "active" : ""}
-            href="/admin"
-            onClick={(event) => handleNavigation(event, "admin")}
+          </NavLink>
+          <NavLink
+            className={({ isActive }) => (isActive ? "active" : "")}
+            to="/admin"
           >
             <Shield aria-hidden="true" size={16} />
             Admin
-          </a>
+          </NavLink>
         </div>
         <div className="system-status" title="API and database status">
           <Server aria-hidden="true" size={18} />
