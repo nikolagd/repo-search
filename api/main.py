@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 
 import psycopg2
@@ -41,6 +42,8 @@ from api.schemas import (
 )
 from api.services import check_database, get_repositories, get_stats, run_search
 
+logger = logging.getLogger("uvicorn.error")
+
 
 def should_run_db_migrations_on_startup() -> bool:
     return os.getenv("RUN_DB_MIGRATIONS_ON_STARTUP", "false").strip().lower() in {
@@ -60,7 +63,13 @@ async def lifespan(app: FastAPI):
     try:
         fail_interrupted_jobs()
     except Exception as exc:
-        print(f"Could not mark interrupted admin jobs: {exc}")
+        logger.warning("Could not mark interrupted admin jobs: %s", exc)
+
+    from embeddings.model import warm_up_embedding_model
+
+    logger.info("Loading embedding model.")
+    warm_up_embedding_model()
+    logger.info("Embedding model loaded.")
 
     yield
 

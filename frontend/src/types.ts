@@ -1,5 +1,3 @@
-export type ViewMode = "search" | "admin";
-
 export type AuthMode = "login" | "register";
 
 export type JobStatus = "running" | "succeeded" | "failed";
