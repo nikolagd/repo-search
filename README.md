@@ -1,155 +1,179 @@
-## Harvest repozitorijuma
+# Repo Search - Docker pokretanje
 
+Aplikacija se pokreće preko Docker Compose-a. Compose startuje:
 
+- PostgreSQL sa `pgvector` ekstenzijom
+- FastAPI backend
+- React frontend kroz nginx
+- Ollama za LLM parsiranje upita
 
-### Podešavanja
+PostgreSQL podaci se čuvaju u `./data/postgres`. Ollama modeli se čuvaju u Docker volume-u `repo-search_ollama_data`. `docker compose down` ne briše ni bazu ni Ollama modele.
 
-Kloniranje
+## Šta je potrebno
 
-```bash
-git clone https://github.com/nikolagd/repo-search.git
-cd repo-search
+- Docker Desktop
+- NVIDIA driver
+- Docker GPU podrška, ako se koristi CUDA
+
+## Podešavanje
+
+Napraviti env fajl:
+
+```powershell
+copy .env.docker.example .env.docker
 ```
 
-Kreairanje i aktivacija virtuelnog okruženja (venv):
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
-Instaliranje dependencija:
-```bash
-pip install -r requirements.txt
-```
-Konfigurisanje .env fajla:
+U `.env.docker` promeniti bar ove vrednosti:
 
-Kreirati .env fajl na osnovu .example.env. 
-U njemu definisati konekciju ka bazi i oai endpoint.
+- `API_TOKEN`
+- `ADMIN_JWT_SECRET`
+- `DB_PASSWORD`
+- `OAI_BASE_URL`, ako se koristi drugi OAI endpoint
 
-`API_TOKEN` mora biti ista vrednost za FastAPI i Vite dev proxy. React kod ne
-dobija token direktno; Vite ga cita sa serverske strane iz `.env` fajla i dodaje
-`X-API-Key` samo kada proxy prosledjuje `/api` zahteve ka FastAPI-ju.
+Podrazumevani Ollama model je:
 
-Za admin login potrebno je dodati i `ADMIN_JWT_SECRET`. To je odvojena tajna
-od najmanje 32 bajta koja se koristi za potpisivanje JWT tokena posle login-a.
-JWT se cuva u
-`HttpOnly` cookie-ju, a admin `POST` rute koriste dodatni CSRF cookie/header
-par (`repo_search_admin_csrf` i `X-CSRF-Token`) za zastitu cookie sesije.
-Admin JWT ima rolling expiry: `ADMIN_JWT_EXPIRY_MINUTES` je trajanje novog
-tokena, a aktivna sesija se osvezava kada je token stariji od
-`ADMIN_JWT_ROTATION_INTERVAL_MINUTES`. `ADMIN_JWT_MAX_SESSION_MINUTES` je
-gornja granica ukupnog trajanja sesije, cak i ako je korisnik aktivan.
-Admin harvest i embedding poslovi se cuvaju u PostgreSQL tabeli `admin_job`.
-`ADMIN_JOB_STATUS_HISTORY_MINUTES` odredjuje koliko dugo se zavrseni/failed
-statusi vracaju admin UI-ju nakon sto posao vise ne radi. Zavrseni statusi se
-mogu dismiss-ovati iz admin UI-ja; tada dobijaju `acknowledged_at` i vise se ne
-prikazuju.
-
-
-Pokretanje iz komandne linije sa:
-```bash
-python -m etl.main
+```env
+LLM_MODEL=llama3.1:8b
 ```
 
-`etl.main` koristi `OAI_BASE_URL` iz `.env` fajla da pronadje red u tabeli
-`repository`. Za eksplicitno biranje repozitorijuma mogu se koristiti:
+GPU podešavanja su već uključena:
 
-```bash
-python -m etl.main --repo-url https://example.com/oai/request
-python -m etl.main --repo-id 3
+```env
+NVIDIA_VISIBLE_DEVICES=all
+NVIDIA_DRIVER_CAPABILITIES=compute,utility
+OLLAMA_KEEP_ALIVE=30m
 ```
 
-Ako URL jos ne postoji u tabeli `repository`, eksplicitno dodati:
+## Pokretanje
 
-```bash
-python -m etl.main --repo-url https://example.com/oai/request --create-repo
+Pokrenuti ceo stack:
+
+```powershell
+docker compose --env-file .env.docker up --build -d
 ```
 
-Grube provere da li je upisivanje u bazu uspelo:
-```bash
-psql -U postgres -d [naziv_baze] -p [port] -f etl/checks.sql
+Prvi put povući Ollama model:
+
+```powershell
+docker compose --env-file .env.docker exec ollama ollama pull llama3.1:8b
 ```
 
-### Migracije baze
+Model ostaje sačuvan u Docker volume-u, pa se ne skida ponovo posle restartovanja kontejnera.
 
-Pre pokretanja API-ja, ETL-a ili Docker kontejnera koji zavise od baze,
-primeniti migracije:
+Aplikacija je dostupna na:
 
-```bash
-python -m etl.migrate
+- `http://localhost:8080`
+- API provera: `http://localhost:8080/api/health`
+- Ollama API: `http://localhost:11434`
+
+## Zaustavljanje
+
+Zaustaviti kontejnere, bez brisanja podataka:
+
+```powershell
+docker compose --env-file .env.docker down
 ```
 
-Komanda koristi `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` i `DB_PASSWORD` iz
-okruzenja ili `.env` fajla. Za Docker entrypoint, pokrenuti ovu komandu nakon
-sto je Postgres spreman za konekcije, a pre startovanja FastAPI servera.
-Alternativno, za API kontejner se moze postaviti
-`RUN_DB_MIGRATIONS_ON_STARTUP=true`, pa ce FastAPI primeniti pending migracije
-pri startovanju.
-Postgres image mora imati `pgvector`, jer prva migracija kreira `vector`
-ekstenziju.
+Ponovno pokretanje:
 
-### API sloj
-
-FastAPI aplikacija je srednji sloj izmedju frontend-a i postojecih Python modula
-za ETL, parsiranje upita i vektorsku pretragu.
-
-Pokretanje API servera:
-
-```bash
-.venv\Scripts\activate
-$env:API_TOKEN="ista_vrednost_kao_u_env_fajlu"
-uvicorn api.main:app --reload --host 127.0.0.1 --port 8010
+```powershell
+docker compose --env-file .env.docker up -d
 ```
 
-Ako je embedding model vec kesiran lokalno, a okruzenje nema pristup Hugging
-Face-u, pre pokretanja API-ja postaviti:
+Ne koristiti `down -v` osim ako namerno treba obrisati Docker volume-e. Time se briše i Ollama model.
 
-```bash
-set HF_HUB_OFFLINE=1
+## Korisne komande
+
+Status kontejnera:
+
+```powershell
+docker compose --env-file .env.docker ps
 ```
 
-Glavne rute:
+Logovi:
 
-- `GET /api/health` - provera API-ja i konekcije ka bazi
-- `GET /api/stats` - osnovna statistika nad repozitorijumima i publikacijama
-- `GET /api/repositories` - lista registrovanih OAI repozitorijuma
-- `POST /api/search` - parsiranje prirodnog upita i semanticka pretraga
-- `POST /api/auth/register` - registracija admin naloga
-- `POST /api/auth/login` - admin login, postavlja `HttpOnly` JWT cookie
-- `POST /api/auth/logout` - brise admin cookie-je, uz CSRF proveru
-- `GET /api/admin/repositories` - admin lista repozitorijuma sa harvest statusom
-- `POST /api/admin/repositories` - kreiranje repozitorijuma iz admin UI-ja
-- `PUT /api/admin/repositories/{repo_id}` - izmena naziva, OAI endpoint-a i refresh intervala
-- `POST /api/admin/jobs/{job_id}/acknowledge` - sakrivanje zavrsenog job statusa
-- `POST /api/admin/repositories/{repo_id}/harvest` - pokretanje harvest-a za repozitorijum
-- `GET /api/admin/embeddings` - broj publikacija kojima nedostaje embedding
-- `POST /api/admin/embeddings/backfill` - pokretanje embedding backfill procesa
-
-### Frontend
-
-Frontend je React aplikacija u `frontend/` direktorijumu. Tokom razvoja Vite
-prosledjuje sve `/api` pozive ka FastAPI serveru koji je definisan kroz
-`API_PROXY_TARGET` u root `.env` fajlu i
-dodaje `X-API-Key` header iz root `.env` fajla. Token se ne ubacuje u browser
-bundle. Admin login koristi JWT token u `HttpOnly` cookie-ju, tako da ga React
-kod ne moze procitati iz browser JavaScript-a. React cita samo nesakriveni CSRF
-cookie i salje njegovu vrednost nazad kroz `X-CSRF-Token` header za admin
-mutacije kao sto su logout, harvest i embedding backfill.
-
-Pokretanje:
-
-```bash
-cd frontend
-npm install
-npm run dev
+```powershell
+docker compose --env-file .env.docker logs -f api
+docker compose --env-file .env.docker logs -f frontend
+docker compose --env-file .env.docker logs -f db
+docker compose --env-file .env.docker logs -f ollama
 ```
 
-Aplikacija je dostupna na `http://127.0.0.1:5173`.
-Frontend koristi `react-router-dom` za glavne stranice:
+Ulazak u kontejner:
 
-- `/search` - pretraga
-- `/admin` - admin dashboard
-- `/admin/login` - admin login
-- `/admin/register` - inicijalna registracija admin naloga
+```powershell
+docker compose --env-file .env.docker exec api bash
+docker compose --env-file .env.docker exec db bash
+docker compose --env-file .env.docker exec ollama bash
+```
 
-Ove putanje su UI navigacija. Admin zastita je i dalje na FastAPI strani kroz
-`HttpOnly` JWT cookie i CSRF proveru.
+Pristup bazi:
+
+```powershell
+docker compose --env-file .env.docker exec db psql -U repo_search -d repo_search
+```
+
+Lista Ollama modela:
+
+```powershell
+docker compose --env-file .env.docker exec ollama ollama list
+```
+
+Provera da li Ollama model koristi GPU:
+
+```powershell
+docker compose --env-file .env.docker exec ollama ollama ps
+```
+
+Provera GPU zauzeća:
+
+```powershell
+nvidia-smi
+```
+
+## Troubleshooting
+
+Ako API nije zdrav:
+
+```powershell
+docker compose --env-file .env.docker logs --tail 100 api
+```
+
+Ako se frontend otvara, ali API pozivi ne rade:
+
+```powershell
+curl.exe http://localhost:8080/api/health
+```
+
+Ako pretraga ne radi, proveriti da li je Ollama model prisutan:
+
+```powershell
+docker compose --env-file .env.docker exec ollama ollama list
+```
+
+Ako model nije prisutan:
+
+```powershell
+docker compose --env-file .env.docker exec ollama ollama pull llama3.1:8b
+```
+
+Ako izgleda kao da Ollama koristi RAM umesto VRAM-a:
+
+```powershell
+docker compose --env-file .env.docker exec ollama ollama ps
+nvidia-smi
+```
+
+`ollama ps` treba da prikaže `100% GPU`. Na Windows-u Task Manager ne prikazuje uvek jasno Docker/WSL VRAM zauzeće, pa su `ollama ps` i `nvidia-smi` pouzdaniji.
+
+Ako embedding model ne koristi CUDA:
+
+```powershell
+docker compose --env-file .env.docker exec api python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
+```
+
+Ako podaci iz baze nestanu, proveriti da postoji `./data/postgres` i da stack nije zaustavljen sa:
+
+```powershell
+docker compose --env-file .env.docker down -v
+```
