@@ -1,4 +1,4 @@
-# Repo Search - Docker pokretanje
+# Harvest i pretraga repozitorijuma
 
 Aplikacija se pokreće preko Docker Compose-a. Compose startuje:
 
