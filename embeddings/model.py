@@ -33,3 +33,10 @@ def generate_embedding(title, abstract):
     )
 
     return vector.tolist()
+
+
+def warm_up_embedding_model():
+    model.encode(
+        "query: warmup",
+        normalize_embeddings=True,
+    )

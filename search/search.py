@@ -44,8 +44,17 @@ def fetch_vector_results(query_vector, limit, year_from, year_to):
             p.abstract,
             p.source_url,
             p.date,
-            p.embedding <=> %s::vector AS cosine_distance
+            p.embedding <=> %s::vector AS cosine_distance,
+            r.name AS repository_name,
+            COALESCE(
+                ARRAY_AGG(a.full_name ORDER BY a.full_name)
+                    FILTER (WHERE a.full_name IS NOT NULL),
+                '{}'
+            ) AS authors
         FROM publication p
+        LEFT JOIN repository r ON r.id = p.repository_id
+        LEFT JOIN publication_author pa ON pa.publication_id = p.id
+        LEFT JOIN author a ON a.id = pa.author_id
         WHERE p.embedding IS NOT NULL
     """
 
@@ -60,6 +69,7 @@ def fetch_vector_results(query_vector, limit, year_from, year_to):
         params.append(f"{year_to}-12-31")
 
     sql += """
+        GROUP BY p.id, r.name
         ORDER BY cosine_distance ASC
         LIMIT %s
     """
@@ -120,6 +130,8 @@ def semantic_search(
                     "date": row[4],
                     "cosine_distance": cosine_distance,
                     "cosine_similarity": cosine_similarity,
+                    "repository": row[6],
+                    "authors": row[7],
                     "matched_query": embedding_query,
                     "matched_queries": {embedding_query},
                     "best_rank": rank,

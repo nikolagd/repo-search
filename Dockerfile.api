@@ -1,0 +1,32 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface \
+    SENTENCE_TRANSFORMERS_HOME=/models/sentence-transformers
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+ARG PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu130
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --extra-index-url "${PIP_EXTRA_INDEX_URL}" -r requirements.txt
+
+COPY api ./api
+COPY embeddings ./embeddings
+COPY etl ./etl
+COPY migrations ./migrations
+COPY search ./search
+COPY test_search.py .
+
+RUN mkdir -p /app/data /models/huggingface /models/sentence-transformers
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

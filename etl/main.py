@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import argparse
 import os
 import sys
@@ -14,8 +14,32 @@ from etl.db import (
     insert_publication,
     update_last_harvest,
 )
-from etl.oai_client import OAIClientError, OAINoRecordsMatch, choose_metadata_prefix, fetch_page
+from etl.oai_client import OAIClientError, OAINoRecordsMatch, choose_metadata_prefix, fetch_page, get_granularity
 from etl.parser import parse_oai_xml
+
+
+FULL_TIMESTAMP_GRANULARITY = "YYYY-MM-DDThh:mm:ssZ"
+
+
+def utc_now_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def to_utc(value):
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc)
+
+    return value.astimezone().astimezone(timezone.utc)
+
+
+def format_oai_from_date(last_harvest, granularity):
+    if last_harvest is None:
+        return None
+
+    if granularity == FULL_TIMESTAMP_GRANULARITY:
+        return to_utc(last_harvest).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return last_harvest.strftime("%Y-%m-%d")
 
 
 def harvest_repository(conn, repository, output_dir=None):
@@ -31,14 +55,11 @@ def harvest_repository(conn, repository, output_dir=None):
     base_url = repository["oai_endpoint"]
     total_processed = 0
     page_num = 1
-    harvest_started_at = datetime.now()
+    harvest_started_at = utc_now_naive()
     last_harvest = repository["last_harvest"]
+    granularity = get_granularity(base_url=base_url)
     metadata_prefix = choose_metadata_prefix(base_url=base_url)
-
-    if last_harvest:
-        from_date = last_harvest.strftime("%Y-%m-%dT%H:%M:%S")
-    else:
-        from_date = None
+    from_date = format_oai_from_date(last_harvest, granularity)
 
     try:
         xml_text = fetch_page(
@@ -49,6 +70,7 @@ def harvest_repository(conn, repository, output_dir=None):
     except OAINoRecordsMatch:
         print(f"Repository {repo_id}: {repository['name']}")
         print(f"Using metadata_prefix: {metadata_prefix}")
+        print(f"Using granularity: {granularity}")
         print(f"Using from_date: {from_date}")
         print("No records matched the incremental harvest window.")
         update_last_harvest(conn, repo_id, harvest_started_at)
@@ -62,6 +84,7 @@ def harvest_repository(conn, repository, output_dir=None):
         records, token = parse_oai_xml(xml_text, metadata_prefix)
         print(f"Repository {repo_id}: {repository['name']}")
         print(f"Using metadata_prefix: {metadata_prefix}")
+        print(f"Using granularity: {granularity}")
         print(f"Using from_date: {from_date}")
         print(f"Page {page_num}: {len(records)} records")
 
