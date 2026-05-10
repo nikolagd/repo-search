@@ -133,7 +133,7 @@ nvidia-smi
 
 ## Troubleshooting
 
-Ako API nije zdrav:
+Ako API nije up:
 
 ```powershell
 docker compose --env-file .env.docker logs --tail 100 api
