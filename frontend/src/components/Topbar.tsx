@@ -10,7 +10,6 @@ export default function Topbar({ health }: TopbarProps) {
   return (
     <header className="topbar">
       <div>
-        <span className="eyebrow">Repository intelligence</span>
         <h1>Repo Search</h1>
       </div>
       <div className="topbar-actions">
