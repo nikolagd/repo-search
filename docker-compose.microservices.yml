@@ -1,0 +1,309 @@
+name: repo-search-microservices
+
+services:
+  auth-db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: ${AUTH_DB_NAME:-repo_search_auth}
+      POSTGRES_USER: ${AUTH_DB_USER:-repo_search_auth}
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:-repo_search_auth_password}
+    volumes:
+      - auth_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  catalog-db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: ${CATALOG_DB_NAME:-repo_search_catalog}
+      POSTGRES_USER: ${CATALOG_DB_USER:-repo_search_catalog}
+      POSTGRES_PASSWORD: ${CATALOG_DB_PASSWORD:-repo_search_catalog_password}
+    volumes:
+      - catalog_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  job-db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: ${JOB_DB_NAME:-repo_search_jobs}
+      POSTGRES_USER: ${JOB_DB_USER:-repo_search_jobs}
+      POSTGRES_PASSWORD: ${JOB_DB_PASSWORD:-repo_search_jobs_password}
+    volumes:
+      - job_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  search-db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: ${SEARCH_DB_NAME:-repo_search_search}
+      POSTGRES_USER: ${SEARCH_DB_USER:-repo_search_search}
+      POSTGRES_PASSWORD: ${SEARCH_DB_PASSWORD:-repo_search_search_password}
+    volumes:
+      - search_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.gateway.main:app --host 0.0.0.0 --port 8000
+    environment:
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      AUTH_SERVICE_URL: http://auth-service:8000
+      CATALOG_SERVICE_URL: http://catalog-service:8000
+      SEARCH_SERVICE_URL: http://search-service:8000
+      JOB_SERVICE_URL: http://job-service:8000
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      search-service:
+        condition: service_healthy
+      job-service:
+        condition: service_healthy
+    ports:
+      - "${MICROSERVICE_GATEWAY_HOST_PORT:-8090}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.auth_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: auth-db
+      DB_PORT: 5432
+      DB_NAME: ${AUTH_DB_NAME:-repo_search_auth}
+      DB_USER: ${AUTH_DB_USER:-repo_search_auth}
+      DB_PASSWORD: ${AUTH_DB_PASSWORD:-repo_search_auth_password}
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-local-dev-admin-jwt-secret-change-me-32-bytes}
+      ADMIN_JWT_EXPIRY_MINUTES: ${ADMIN_JWT_EXPIRY_MINUTES:-120}
+      ADMIN_JWT_ROTATION_INTERVAL_MINUTES: ${ADMIN_JWT_ROTATION_INTERVAL_MINUTES:-15}
+      ADMIN_JWT_MAX_SESSION_MINUTES: ${ADMIN_JWT_MAX_SESSION_MINUTES:-720}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  catalog-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.catalog_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: catalog-db
+      DB_PORT: 5432
+      DB_NAME: ${CATALOG_DB_NAME:-repo_search_catalog}
+      DB_USER: ${CATALOG_DB_USER:-repo_search_catalog}
+      DB_PASSWORD: ${CATALOG_DB_PASSWORD:-repo_search_catalog_password}
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  search-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.search_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: search-db
+      DB_PORT: 5432
+      DB_NAME: ${SEARCH_DB_NAME:-repo_search_search}
+      DB_USER: ${SEARCH_DB_USER:-repo_search_search}
+      DB_PASSWORD: ${SEARCH_DB_PASSWORD:-repo_search_search_password}
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      QUERY_SERVICE_URL: http://query-service:8000
+      EMBEDDING_SERVICE_URL: http://embedding-service:8000
+    depends_on:
+      search-db:
+        condition: service_healthy
+      query-service:
+        condition: service_healthy
+      embedding-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  query-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.query_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_URL: ${LLM_URL:-http://ollama:11434/api/generate}
+      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-60}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  embedding-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.embedding_service.main:app --host 0.0.0.0 --port 8000
+    gpus: all
+    environment:
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+    volumes:
+      - model_cache:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  job-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: uvicorn microservices.job_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: job-db
+      DB_PORT: 5432
+      DB_NAME: ${JOB_DB_NAME:-repo_search_jobs}
+      DB_USER: ${JOB_DB_USER:-repo_search_jobs}
+      DB_PASSWORD: ${JOB_DB_PASSWORD:-repo_search_jobs_password}
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+    depends_on:
+      job-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  job-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.microservice
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    command: python -m microservices.workers.job_worker
+    environment:
+      DB_HOST: job-db
+      DB_PORT: 5432
+      DB_NAME: ${JOB_DB_NAME:-repo_search_jobs}
+      DB_USER: ${JOB_DB_USER:-repo_search_jobs}
+      DB_PASSWORD: ${JOB_DB_PASSWORD:-repo_search_jobs_password}
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      CATALOG_SERVICE_URL: http://catalog-service:8000
+      EMBEDDING_SERVICE_URL: http://embedding-service:8000
+      SEARCH_SERVICE_URL: http://search-service:8000
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+      HARVEST_OUTPUT_DIR: /app/data
+    depends_on:
+      job-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      search-service:
+        condition: service_healthy
+      embedding-service:
+        condition: service_healthy
+    volumes:
+      - harvest_xml_data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      API_UPSTREAM: http://gateway:8000
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "${MICROSERVICE_FRONTEND_HOST_PORT:-8091}:80"
+
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    restart: unless-stopped
+    gpus: all
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    volumes:
+      - ollama_microservice_data:/root/.ollama
+    ports:
+      - "${MICROSERVICE_OLLAMA_HOST_PORT:-11435}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  auth_db_data:
+  catalog_db_data:
+  job_db_data:
+  search_db_data:
+  harvest_xml_data:
+  model_cache:
+  ollama_microservice_data:

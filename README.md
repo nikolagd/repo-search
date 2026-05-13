@@ -1,6 +1,6 @@
 # Harvest i pretraga repozitorijuma
 
-Aplikacija se pokreće preko Docker Compose-a. Compose startuje:
+Aplikacija se pokreće preko Docker Compose-a. Osnovni stack startuje:
 
 - PostgreSQL sa `pgvector` ekstenzijom
 - FastAPI backend
@@ -177,3 +177,57 @@ Ako podaci iz baze nestanu, proveriti da postoji `./data/postgres` i da stack ni
 ```powershell
 docker compose --env-file .env.docker down -v
 ```
+
+## Microservice Architecture Stack
+
+Ova grana dodaje poseban Docker Compose cluster za microservice/SOA verziju aplikacije. Postojeći `docker-compose.yml` ostaje netaknut, a novi stack koristi poseban Compose project name, portove, baze i Docker volumene.
+
+Kopirati env fajl:
+
+```powershell
+copy .env.microservices.example .env.microservices
+```
+
+Pokrenuti microservice cluster:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml up --build -d
+```
+
+Adrese:
+
+- Frontend: `http://localhost:8091`
+- API gateway health: `http://localhost:8090/api/health`
+- Ollama API za ovaj cluster: `http://localhost:11435`
+
+Ollama model treba povući jednom u novi cluster:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
+```
+
+Backend je razbijen na sledeće servise:
+
+- `gateway`: API gateway kompatibilan sa postojećim frontend rutama pod `/api`
+- `auth-service`: admin login, JWT cookie, rotacija sesije i CSRF validacija
+- `catalog-service`: repozitorijumi, publikacije, autori i katalog statistika
+- `search-service`: pgvector search read model i rangiranje rezultata
+- `query-service`: parsiranje prirodnog jezika preko Ollama/LLM servisa
+- `embedding-service`: SentenceTransformer embedding model
+- `job-service`: stanje harvest/backfill poslova
+- `job-worker`: background worker za harvest i embedding backfill
+
+Stack koristi odvojene baze po servisima:
+
+- `auth-db`
+- `catalog-db`
+- `job-db`
+- `search-db`
+
+Zaustavljanje microservice clustera:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml down
+```
+
+`down -v` koristiti samo ako namerno brišeš microservice volume podatke.

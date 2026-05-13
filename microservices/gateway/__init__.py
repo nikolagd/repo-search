@@ -1,0 +1,1 @@
+"""Frontend-compatible API gateway."""
