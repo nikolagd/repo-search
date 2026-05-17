@@ -20,7 +20,8 @@ U `.env.microservices` promeniti bar ove vrednosti:
 
 - `API_TOKEN`
 - `ADMIN_JWT_SECRET`
-- lozinke za `AUTH_DB_PASSWORD`, `CATALOG_DB_PASSWORD`, `JOB_DB_PASSWORD`, `SEARCH_DB_PASSWORD`
+- `DB_PASSWORD`
+- `DB_REPLICATION_PASSWORD`
 
 ## Pokretanje
 
@@ -55,14 +56,16 @@ Backend je razbijen na sledeće servise:
 - `job-service`: stanje harvest/backfill poslova
 - `job-worker`: background worker za harvest i embedding backfill
 
-Stack koristi odvojene baze po servisima:
+## Baza podataka
 
-- `auth-db`
-- `catalog-db`
-- `job-db`
-- `search-db`
+Po zahtevu kursa, svi servisi koriste jednu deljenu PostgreSQL/pgvector bazu:
 
-`gateway`, `query-service`, `embedding-service` i `job-worker` nemaju sopstvenu aplikacionu bazu zato što ne poseduju trajne poslovne podatke. `embedding-service` koristi samo model cache volume.
+- `db-primary`: primarna baza u koju servisi upisuju i iz koje čitaju
+- `db-replica`: streaming replika primarne baze
+
+Servisi su i dalje razdvojeni po logici i pokreću se kao zasebni kontejneri, ali dele istu bazu. To znači da ovo nije stroga database-per-service arhitektura; ovo je prirodna dekompozicija monolita na servise uz centralizovanu perzistenciju.
+
+Replika služi kao demonstracija produkcionog obrasca sa primarnom bazom i read-only kopijom. Aplikacioni servisi trenutno koriste `db-primary`; `db-replica` se može koristiti za čitanje, analitiku ili backup scenarije.
 
 ## Korisne komande
 
@@ -91,6 +94,12 @@ Provera da li Ollama model koristi GPU:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama ps
+```
+
+Provera da li je replika u recovery/read-only režimu:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec db-replica psql -U repo_search -d repo_search -c "SELECT pg_is_in_recovery();"
 ```
 
 Provera GPU zauzeća:

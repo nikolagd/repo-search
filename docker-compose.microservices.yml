@@ -1,56 +1,40 @@
 name: repo-search-microservices
 
 services:
-  auth-db:
+  db-primary:
     image: pgvector/pgvector:pg18
     environment:
-      POSTGRES_DB: ${AUTH_DB_NAME:-repo_search_auth}
-      POSTGRES_USER: ${AUTH_DB_USER:-repo_search_auth}
-      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:-repo_search_auth_password}
+      POSTGRES_DB: ${DB_NAME:-repo_search}
+      POSTGRES_USER: ${DB_USER:-repo_search}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-repo_search_password}
+      POSTGRES_REPLICATION_USER: ${DB_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD: ${DB_REPLICATION_PASSWORD:-repo_search_replication_password}
     volumes:
-      - auth_db_data:/var/lib/postgresql
+      - shared_db_primary_data:/var/lib/postgresql
+      - ./docker/postgres/init-primary-replication.sh:/docker-entrypoint-initdb.d/010-init-primary-replication.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  catalog-db:
+  db-replica:
     image: pgvector/pgvector:pg18
     environment:
-      POSTGRES_DB: ${CATALOG_DB_NAME:-repo_search_catalog}
-      POSTGRES_USER: ${CATALOG_DB_USER:-repo_search_catalog}
-      POSTGRES_PASSWORD: ${CATALOG_DB_PASSWORD:-repo_search_catalog_password}
+      POSTGRES_DB: ${DB_NAME:-repo_search}
+      POSTGRES_USER: ${DB_USER:-repo_search}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-repo_search_password}
+      POSTGRES_PRIMARY_HOST: db-primary
+      POSTGRES_PRIMARY_PORT: 5432
+      POSTGRES_REPLICATION_USER: ${DB_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD: ${DB_REPLICATION_PASSWORD:-repo_search_replication_password}
     volumes:
-      - catalog_db_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  job-db:
-    image: pgvector/pgvector:pg18
-    environment:
-      POSTGRES_DB: ${JOB_DB_NAME:-repo_search_jobs}
-      POSTGRES_USER: ${JOB_DB_USER:-repo_search_jobs}
-      POSTGRES_PASSWORD: ${JOB_DB_PASSWORD:-repo_search_jobs_password}
-    volumes:
-      - job_db_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  search-db:
-    image: pgvector/pgvector:pg18
-    environment:
-      POSTGRES_DB: ${SEARCH_DB_NAME:-repo_search_search}
-      POSTGRES_USER: ${SEARCH_DB_USER:-repo_search_search}
-      POSTGRES_PASSWORD: ${SEARCH_DB_PASSWORD:-repo_search_search_password}
-    volumes:
-      - search_db_data:/var/lib/postgresql
+      - shared_db_replica_data:/var/lib/postgresql
+      - ./docker/postgres/start-replica.sh:/usr/local/bin/start-replica.sh:ro
+    command: ["sh", "/usr/local/bin/start-replica.sh"]
+    depends_on:
+      db-primary:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -95,11 +79,11 @@ services:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     command: uvicorn microservices.auth_service.main:app --host 0.0.0.0 --port 8000
     environment:
-      DB_HOST: auth-db
+      DB_HOST: db-primary
       DB_PORT: 5432
-      DB_NAME: ${AUTH_DB_NAME:-repo_search_auth}
-      DB_USER: ${AUTH_DB_USER:-repo_search_auth}
-      DB_PASSWORD: ${AUTH_DB_PASSWORD:-repo_search_auth_password}
+      DB_NAME: ${DB_NAME:-repo_search}
+      DB_USER: ${DB_USER:-repo_search}
+      DB_PASSWORD: ${DB_PASSWORD:-repo_search_password}
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-local-dev-admin-jwt-secret-change-me-32-bytes}
       ADMIN_JWT_EXPIRY_MINUTES: ${ADMIN_JWT_EXPIRY_MINUTES:-120}
@@ -107,7 +91,7 @@ services:
       ADMIN_JWT_MAX_SESSION_MINUTES: ${ADMIN_JWT_MAX_SESSION_MINUTES:-720}
       ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
     depends_on:
-      auth-db:
+      db-primary:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
@@ -123,14 +107,14 @@ services:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     command: uvicorn microservices.catalog_service.main:app --host 0.0.0.0 --port 8000
     environment:
-      DB_HOST: catalog-db
+      DB_HOST: db-primary
       DB_PORT: 5432
-      DB_NAME: ${CATALOG_DB_NAME:-repo_search_catalog}
-      DB_USER: ${CATALOG_DB_USER:-repo_search_catalog}
-      DB_PASSWORD: ${CATALOG_DB_PASSWORD:-repo_search_catalog_password}
+      DB_NAME: ${DB_NAME:-repo_search}
+      DB_USER: ${DB_USER:-repo_search}
+      DB_PASSWORD: ${DB_PASSWORD:-repo_search_password}
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
     depends_on:
-      catalog-db:
+      db-primary:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
@@ -146,16 +130,16 @@ services:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     command: uvicorn microservices.search_service.main:app --host 0.0.0.0 --port 8000
     environment:
-      DB_HOST: search-db
+      DB_HOST: db-primary
       DB_PORT: 5432
-      DB_NAME: ${SEARCH_DB_NAME:-repo_search_search}
-      DB_USER: ${SEARCH_DB_USER:-repo_search_search}
-      DB_PASSWORD: ${SEARCH_DB_PASSWORD:-repo_search_search_password}
+      DB_NAME: ${DB_NAME:-repo_search}
+      DB_USER: ${DB_USER:-repo_search}
+      DB_PASSWORD: ${DB_PASSWORD:-repo_search_password}
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       QUERY_SERVICE_URL: http://query-service:8000
       EMBEDDING_SERVICE_URL: http://embedding-service:8000
     depends_on:
-      search-db:
+      db-primary:
         condition: service_healthy
       query-service:
         condition: service_healthy
@@ -219,14 +203,14 @@ services:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     command: uvicorn microservices.job_service.main:app --host 0.0.0.0 --port 8000
     environment:
-      DB_HOST: job-db
+      DB_HOST: db-primary
       DB_PORT: 5432
-      DB_NAME: ${JOB_DB_NAME:-repo_search_jobs}
-      DB_USER: ${JOB_DB_USER:-repo_search_jobs}
-      DB_PASSWORD: ${JOB_DB_PASSWORD:-repo_search_jobs_password}
+      DB_NAME: ${DB_NAME:-repo_search}
+      DB_USER: ${DB_USER:-repo_search}
+      DB_PASSWORD: ${DB_PASSWORD:-repo_search_password}
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
     depends_on:
-      job-db:
+      db-primary:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
@@ -242,11 +226,11 @@ services:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     command: python -m microservices.workers.job_worker
     environment:
-      DB_HOST: job-db
+      DB_HOST: db-primary
       DB_PORT: 5432
-      DB_NAME: ${JOB_DB_NAME:-repo_search_jobs}
-      DB_USER: ${JOB_DB_USER:-repo_search_jobs}
-      DB_PASSWORD: ${JOB_DB_PASSWORD:-repo_search_jobs_password}
+      DB_NAME: ${DB_NAME:-repo_search}
+      DB_USER: ${DB_USER:-repo_search}
+      DB_PASSWORD: ${DB_PASSWORD:-repo_search_password}
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       CATALOG_SERVICE_URL: http://catalog-service:8000
       EMBEDDING_SERVICE_URL: http://embedding-service:8000
@@ -300,10 +284,8 @@ services:
       start_period: 10s
 
 volumes:
-  auth_db_data:
-  catalog_db_data:
-  job_db_data:
-  search_db_data:
+  shared_db_primary_data:
+  shared_db_replica_data:
   harvest_xml_data:
   model_cache:
   ollama_microservice_data:

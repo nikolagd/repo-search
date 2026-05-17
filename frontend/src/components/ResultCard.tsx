@@ -22,7 +22,7 @@ export default function ResultCard({ result }: ResultCardProps) {
         </div>
         <h3>{result.title || "Untitled publication"}</h3>
         {!!result.authors?.length && (
-          <div className="authors">{result.authors.slice(0, 4).join(", ")}</div>
+          <div className="authors">{result.authors.slice(0, 4).join("; ")}</div>
         )}
         {result.abstract && <p>{result.abstract}</p>}
         <div className="boosts">

@@ -35,6 +35,18 @@ def normalize_date(date_str: str | None) -> datetime | None:
     if not date_str:
         return None
 
+    normalized = date_str.replace("Z", "").strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m", "%Y"):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
 
 def normalize_repository_payload(name: str, oai_endpoint: str, refresh_interval: int | None) -> dict[str, Any]:
     normalized_name = name.strip()
@@ -138,18 +150,6 @@ def update_catalog_repository(repo_id: int, name: str, oai_endpoint: str, refres
         raise
     finally:
         conn.close()
-
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m", "%Y"):
-        try:
-            return datetime.strptime(date_str.replace("Z", ""), fmt)
-        except ValueError:
-            continue
-
-    try:
-        return datetime.fromisoformat(date_str.replace("Z", ""))
-    except ValueError:
-        return None
-
 
 def ensure_schema() -> None:
     conn = get_connection()
