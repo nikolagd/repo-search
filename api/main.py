@@ -12,7 +12,9 @@ from api.admin_auth import (
     clear_admin_cookie,
     create_admin_user,
     has_admin_users,
+    list_admin_users,
     require_admin_user,
+    require_roles,
     require_csrf_token,
     set_admin_cookie,
     set_csrf_cookie,
@@ -29,6 +31,8 @@ from api.admin_jobs import (
 from api.admin_repositories import create_admin_repository, update_admin_repository
 from api.schemas import (
     AdminCredentials,
+    AdminUserCreateRequest,
+    AdminUserListResponse,
     AdminRepositoryResponse,
     AdminUserResponse,
     AuthResponse,
@@ -214,10 +218,45 @@ def admin_repositories() -> list[AdminRepositoryResponse]:
     return [AdminRepositoryResponse(**repo) for repo in list_admin_repositories()]
 
 
+@admin_router.get(
+    "/users",
+    response_model=list[AdminUserListResponse],
+    dependencies=[Depends(require_roles("admin"))],
+)
+def admin_users() -> list[AdminUserListResponse]:
+    return [AdminUserListResponse(**user) for user in list_admin_users()]
+
+
+@admin_router.post(
+    "/users",
+    response_model=AdminUserResponse,
+    dependencies=[Depends(require_csrf_token), Depends(require_roles("admin"))],
+)
+def create_user_admin(request: AdminUserCreateRequest) -> AdminUserResponse:
+    try:
+        return AdminUserResponse(**create_admin_user(
+            username=request.username,
+            password=request.password,
+            role=request.role,
+        ))
+    except psycopg2.errors.UniqueViolation as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Admin username is already registered.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin user creation failed.",
+        ) from exc
+
+
 @admin_router.post(
     "/repositories",
     response_model=RepositoryResponse,
-    dependencies=[Depends(require_csrf_token)],
+    dependencies=[Depends(require_csrf_token), Depends(require_roles("admin", "editor"))],
 )
 def create_repository_admin(request: RepositoryWriteRequest) -> RepositoryResponse:
     try:
@@ -238,7 +277,7 @@ def create_repository_admin(request: RepositoryWriteRequest) -> RepositoryRespon
 @admin_router.put(
     "/repositories/{repo_id}",
     response_model=RepositoryResponse,
-    dependencies=[Depends(require_csrf_token)],
+    dependencies=[Depends(require_csrf_token), Depends(require_roles("admin", "editor"))],
 )
 def update_repository_admin(repo_id: int, request: RepositoryWriteRequest) -> RepositoryResponse:
     try:
@@ -260,7 +299,7 @@ def update_repository_admin(repo_id: int, request: RepositoryWriteRequest) -> Re
 @admin_router.post(
     "/repositories/{repo_id}/harvest",
     response_model=HarvestJobResponse,
-    dependencies=[Depends(require_csrf_token)],
+    dependencies=[Depends(require_csrf_token), Depends(require_roles("admin", "editor"))],
 )
 def harvest_repository_admin(repo_id: int, background_tasks: BackgroundTasks) -> HarvestJobResponse:
     return HarvestJobResponse(**queue_repository_harvest(repo_id, background_tasks))
@@ -273,7 +312,7 @@ def embedding_status() -> EmbeddingStatusResponse:
 
 @admin_router.post(
     "/jobs/{job_id}/acknowledge",
-    dependencies=[Depends(require_csrf_token)],
+    dependencies=[Depends(require_csrf_token), Depends(require_roles("admin", "editor"))],
 )
 def acknowledge_admin_job(job_id: int) -> dict[str, str]:
     try:
@@ -290,7 +329,7 @@ def acknowledge_admin_job(job_id: int) -> dict[str, str]:
 @admin_router.post(
     "/embeddings/backfill",
     response_model=HarvestJobResponse,
-    dependencies=[Depends(require_csrf_token)],
+    dependencies=[Depends(require_csrf_token), Depends(require_roles("admin", "editor"))],
 )
 def embedding_backfill(background_tasks: BackgroundTasks) -> HarvestJobResponse:
     return HarvestJobResponse(**queue_embedding_backfill(background_tasks))

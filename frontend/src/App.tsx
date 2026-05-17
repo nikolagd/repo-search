@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { fetchJson, getErrorMessage } from "./api/client";
 import AdminPanel from "./components/AdminPanel";
+import InfoPage from "./components/InfoPage";
 import OverviewStats from "./components/OverviewStats";
 import ResultsPanel from "./components/ResultsPanel";
 import SearchPanel from "./components/SearchPanel";
@@ -116,6 +117,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/search" replace />} />
         <Route path="/search" element={searchPage} />
+        <Route path="/about" element={<InfoPage />} />
         <Route path="/admin" element={<AdminPanel onOverviewRefresh={loadOverview} />} />
         <Route path="/admin/login" element={<AdminPanel authMode="login" onOverviewRefresh={loadOverview} />} />
         <Route path="/admin/register" element={<AdminPanel authMode="register" onOverviewRefresh={loadOverview} />} />

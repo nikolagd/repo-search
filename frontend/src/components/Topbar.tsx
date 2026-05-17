@@ -1,4 +1,4 @@
-import { Search, Server, Shield } from "lucide-react";
+import { Info, Search, Server, Shield } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import type { HealthResponse } from "../types";
 
@@ -27,6 +27,13 @@ export default function Topbar({ health }: TopbarProps) {
           >
             <Shield aria-hidden="true" size={16} />
             Admin
+          </NavLink>
+          <NavLink
+            className={({ isActive }) => (isActive ? "active" : "")}
+            to="/about"
+          >
+            <Info aria-hidden="true" size={16} />
+            About
           </NavLink>
         </div>
         <div className="system-status" title="API and database status">

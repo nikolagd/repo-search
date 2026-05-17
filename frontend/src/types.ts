@@ -2,6 +2,8 @@ export type AuthMode = "login" | "register";
 
 export type JobStatus = "running" | "succeeded" | "failed";
 
+export type UserRole = "admin" | "editor" | "viewer";
+
 export interface HealthResponse {
   status: string;
   database: string;
@@ -69,6 +71,17 @@ export interface SearchResponse {
 export interface AdminUser {
   id: number;
   username: string;
+  role: UserRole;
+}
+
+export interface AdminUserListResponse extends AdminUser {
+  created_at: string | null;
+}
+
+export interface AdminUserCreatePayload {
+  username: string;
+  password: string;
+  role: UserRole;
 }
 
 export interface AuthResponse {

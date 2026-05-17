@@ -9,6 +9,7 @@ import {
   Save,
   Shield,
   UserPlus,
+  Users,
   X,
 } from "lucide-react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
@@ -17,14 +18,21 @@ import { fetchJson, getErrorMessage } from "../api/client";
 import type {
   AdminRepositoryResponse,
   AdminUser,
+  AdminUserCreatePayload,
+  AdminUserListResponse,
   AuthMode,
   AuthResponse,
   EmbeddingStatusResponse,
   HarvestJob,
   RepositoryResponse,
   RepositoryWritePayload,
+  UserRole,
 } from "../types";
 import { formatDate } from "../utils/format";
+import Button from "./ui/Button";
+import TextField from "./ui/TextField";
+
+const USER_ROLE_OPTIONS: UserRole[] = ["admin", "editor", "viewer"];
 
 interface AdminPanelProps {
   authMode?: AuthMode;
@@ -38,17 +46,24 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [repositories, setRepositories] = useState<AdminRepositoryResponse[]>([]);
+  const [users, setUsers] = useState<AdminUserListResponse[]>([]);
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [adminRefreshing, setAdminRefreshing] = useState(false);
   const [authError, setAuthError] = useState("");
   const [adminError, setAdminError] = useState("");
   const [repositorySaving, setRepositorySaving] = useState(false);
+  const [userSaving, setUserSaving] = useState(false);
   const [editingRepositoryId, setEditingRepositoryId] = useState<number | null>(null);
   const [repositoryForm, setRepositoryForm] = useState({
     name: "",
     oai_endpoint: "",
     refresh_interval: "",
+  });
+  const [userForm, setUserForm] = useState<AdminUserCreatePayload>({
+    username: "",
+    password: "",
+    role: "viewer",
   });
 
   const hasRunningHarvest = useMemo(
@@ -58,13 +73,18 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
   const isEmbeddingRunning = embeddingStatus?.embedding_job?.status === "running";
   const isEditingRepository = editingRepositoryId !== null;
   const canSaveRepository = Boolean(repositoryForm.name.trim() && repositoryForm.oai_endpoint.trim());
+  const canManageData = admin?.role === "admin" || admin?.role === "editor";
+  const canManageUsers = admin?.role === "admin";
+  const canSaveUser = Boolean(userForm.username.trim() && userForm.password.length >= 8);
 
   const clearSession = useCallback(() => {
     setAdmin(null);
     setRepositories([]);
+    setUsers([]);
     setEmbeddingStatus(null);
     setAdminError("");
     resetRepositoryForm();
+    resetUserForm();
   }, []);
 
   function resetRepositoryForm() {
@@ -73,6 +93,14 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
       name: "",
       oai_endpoint: "",
       refresh_interval: "",
+    });
+  }
+
+  function resetUserForm() {
+    setUserForm({
+      username: "",
+      password: "",
+      role: "viewer",
     });
   }
 
@@ -85,12 +113,25 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
     setEmbeddingStatus(embeddingData);
   }, []);
 
+  const loadUsers = useCallback(async () => {
+    const payload = await fetchJson<AdminUserListResponse[]>("/api/admin/users");
+    setUsers(payload);
+  }, []);
+
   const refreshAdminData = useCallback(async () => {
-    await Promise.all([
+    const tasks: Promise<unknown>[] = [
       loadAdminData(),
       onOverviewRefresh(),
-    ]);
-  }, [loadAdminData, onOverviewRefresh]);
+    ];
+
+    if (admin?.role === "admin") {
+      tasks.push(loadUsers());
+    } else {
+      setUsers([]);
+    }
+
+    await Promise.all(tasks);
+  }, [admin?.role, loadAdminData, loadUsers, onOverviewRefresh]);
 
   useEffect(() => {
     let ignore = false;
@@ -102,6 +143,10 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
         if (!ignore) {
           setAdmin(payload);
           await refreshAdminData();
+
+          if (payload.role === "admin") {
+            await loadUsers();
+          }
         }
       } catch {
         if (!ignore) {
@@ -118,7 +163,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
     return () => {
       ignore = true;
     };
-  }, [clearSession, refreshAdminData]);
+  }, [clearSession, loadUsers, refreshAdminData]);
 
   useEffect(() => {
     if ((!hasRunningHarvest && !isEmbeddingRunning) || !admin) {
@@ -160,6 +205,11 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
       setAdmin(payload.admin);
       setPassword("");
       await refreshAdminData();
+
+      if (payload.admin.role === "admin") {
+        await loadUsers();
+      }
+
       navigate("/admin", { replace: true });
     } catch (err) {
       setAuthError(getErrorMessage(err, "Authentication failed"));
@@ -227,6 +277,34 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
       setAdminError(getErrorMessage(err, "Repository save failed"));
     } finally {
       setRepositorySaving(false);
+    }
+  }
+
+  async function submitUserForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!canManageUsers) {
+      return;
+    }
+
+    setAdminError("");
+    setUserSaving(true);
+
+    try {
+      await fetchJson<AdminUser>("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          username: userForm.username.trim(),
+          password: userForm.password,
+          role: userForm.role,
+        }),
+      });
+      resetUserForm();
+      await loadUsers();
+    } catch (err) {
+      setAdminError(getErrorMessage(err, "User save failed"));
+    } finally {
+      setUserSaving(false);
     }
   }
 
@@ -371,7 +449,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
             <RefreshCw aria-hidden="true" className={adminRefreshing ? "spin" : ""} size={18} />
             Refresh
           </button>
-          <span>{admin.username}</span>
+          <span>{admin.username} · {admin.role}</span>
           <button className="icon-action" type="button" onClick={logout} title="Log out">
             <LogOut aria-hidden="true" size={18} />
           </button>
@@ -397,6 +475,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           <label htmlFor="repository-name">Name</label>
           <input
             id="repository-name"
+            disabled={!canManageData}
             value={repositoryForm.name}
             onChange={(event) => setRepositoryForm((current) => ({
               ...current,
@@ -408,6 +487,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           <label htmlFor="repository-endpoint">OAI endpoint</label>
           <input
             id="repository-endpoint"
+            disabled={!canManageData}
             value={repositoryForm.oai_endpoint}
             onChange={(event) => setRepositoryForm((current) => ({
               ...current,
@@ -419,6 +499,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           <label htmlFor="repository-refresh-interval">Refresh interval</label>
           <input
             id="repository-refresh-interval"
+            disabled={!canManageData}
             type="number"
             min="1"
             value={repositoryForm.refresh_interval}
@@ -433,7 +514,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
         <button
           className="primary-action repository-save-action"
           type="submit"
-          disabled={repositorySaving || !canSaveRepository}
+          disabled={!canManageData || repositorySaving || !canSaveRepository}
         >
           {repositorySaving ? (
             <RefreshCw aria-hidden="true" className="spin" size={18} />
@@ -445,6 +526,76 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           {repositorySaving ? "Saving" : isEditingRepository ? "Save changes" : "Add repository"}
         </button>
       </form>
+
+      {canManageUsers && (
+        <article className="admin-tool-panel user-management-panel">
+          <div className="admin-repository-main">
+            <Users aria-hidden="true" size={20} />
+            <div>
+              <h3>User access</h3>
+              <p>Create admin, editor, and viewer accounts for protected workflows.</p>
+            </div>
+          </div>
+
+          <form className="user-form" onSubmit={submitUserForm}>
+            <TextField
+              autoComplete="username"
+              id="new-user-username"
+              label="Username"
+              onValueChange={(value) => setUserForm((current) => ({ ...current, username: value }))}
+              value={userForm.username}
+            />
+            <TextField
+              autoComplete="new-password"
+              id="new-user-password"
+              label="Password"
+              onValueChange={(value) => setUserForm((current) => ({ ...current, password: value }))}
+              type="password"
+              value={userForm.password}
+            />
+            <div className="field">
+              <label htmlFor="new-user-role">Role</label>
+              <select
+                id="new-user-role"
+                value={userForm.role}
+                onChange={(event) => setUserForm((current) => ({
+                  ...current,
+                  role: event.target.value as UserRole,
+                }))}
+              >
+                {USER_ROLE_OPTIONS.map((role) => (
+                  <option key={role} value={role}>{role}</option>
+                ))}
+              </select>
+            </div>
+            <Button
+              disabled={userSaving || !canSaveUser}
+              icon={userSaving ? <RefreshCw aria-hidden="true" className="spin" size={18} /> : <UserPlus aria-hidden="true" size={18} />}
+              type="submit"
+              variant="primary"
+            >
+              {userSaving ? "Creating" : "Create user"}
+            </Button>
+          </form>
+
+          <div className="user-list">
+            {!!users.length && (
+              <div className="user-list-header" aria-hidden="true">
+                <span>User</span>
+                <span>Role</span>
+                <span>Created</span>
+              </div>
+            )}
+            {users.map((user) => (
+              <div className="user-list-row" key={user.id}>
+                <span className="user-name">{user.username}</span>
+                <strong className={`role-badge ${user.role}`}>{user.role}</strong>
+                <span className="user-created">{formatDate(user.created_at)}</span>
+              </div>
+            ))}
+          </div>
+        </article>
+      )}
 
       <article className="admin-tool-panel">
         <div className="admin-repository-main">
@@ -460,7 +611,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           className="secondary-action refresh-action"
           type="button"
           onClick={embedMissingPublications}
-          disabled={isEmbeddingRunning || !embeddingStatus?.missing_embeddings}
+          disabled={!canManageData || isEmbeddingRunning || !embeddingStatus?.missing_embeddings}
         >
           <RefreshCw aria-hidden="true" className={isEmbeddingRunning ? "spin" : ""} size={18} />
           {isEmbeddingRunning ? "Embedding" : "Embed missing"}
@@ -491,7 +642,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
                   className="secondary-action refresh-action"
                   type="button"
                   onClick={() => refreshRepository(repository.id)}
-                  disabled={isRunning}
+                  disabled={!canManageData || isRunning}
                 >
                   <RefreshCw aria-hidden="true" className={isRunning ? "spin" : ""} size={18} />
                   {isRunning ? "Running" : "Refresh"}
@@ -500,7 +651,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
                   className="icon-action"
                   type="button"
                   onClick={() => startEditingRepository(repository)}
-                  disabled={isRunning || repositorySaving}
+                  disabled={!canManageData || isRunning || repositorySaving}
                   title="Edit repository"
                 >
                   <Edit3 aria-hidden="true" size={18} />

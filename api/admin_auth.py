@@ -27,6 +27,7 @@ JWT_EXPIRY_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRY_MINUTES", "120"))
 JWT_ROTATION_INTERVAL_MINUTES = int(os.getenv("ADMIN_JWT_ROTATION_INTERVAL_MINUTES", "15"))
 JWT_MAX_SESSION_MINUTES = int(os.getenv("ADMIN_JWT_MAX_SESSION_MINUTES", "720"))
 PASSWORD_ITERATIONS = 210_000
+USER_ROLES = ("admin", "editor", "viewer")
 
 admin_cookie_scheme = APIKeyCookie(name=ADMIN_COOKIE_NAME, auto_error=False)
 csrf_cookie_scheme = APIKeyCookie(name=CSRF_COOKIE_NAME, auto_error=False)
@@ -55,8 +56,31 @@ def ensure_admin_schema() -> None:
                     id SERIAL PRIMARY KEY,
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'admin',
                     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
                 )
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE admin_user
+                    ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'
+                """
+            )
+            cur.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'chk_admin_user_role'
+                    ) THEN
+                        ALTER TABLE admin_user
+                            ADD CONSTRAINT chk_admin_user_role
+                            CHECK (role IN ('admin', 'editor', 'viewer'));
+                    END IF;
+                END $$
                 """
             )
         conn.commit()
@@ -105,6 +129,18 @@ def normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
+def normalize_role(role: str) -> str:
+    normalized_role = role.strip().lower()
+
+    if normalized_role not in USER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Role must be admin, editor, or viewer.",
+        )
+
+    return normalized_role
+
+
 def has_admin_users() -> bool:
     ensure_admin_schema()
     conn = get_connection()
@@ -117,9 +153,10 @@ def has_admin_users() -> bool:
         conn.close()
 
 
-def create_admin_user(username: str, password: str) -> dict[str, Any]:
+def create_admin_user(username: str, password: str, role: str = "admin") -> dict[str, Any]:
     ensure_admin_schema()
     normalized_username = normalize_username(username)
+    normalized_role = normalize_role(role)
 
     conn = get_connection()
 
@@ -127,11 +164,11 @@ def create_admin_user(username: str, password: str) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO admin_user (username, password_hash)
-                VALUES (%s, %s)
-                RETURNING id, username, created_at
+                INSERT INTO admin_user (username, password_hash, role)
+                VALUES (%s, %s, %s)
+                RETURNING id, username, role, created_at
                 """,
-                (normalized_username, hash_password(password)),
+                (normalized_username, hash_password(password), normalized_role),
             )
             row = cur.fetchone()
         conn.commit()
@@ -144,8 +181,35 @@ def create_admin_user(username: str, password: str) -> dict[str, Any]:
     return {
         "id": row[0],
         "username": row[1],
-        "created_at": row[2],
+        "role": row[2],
+        "created_at": row[3],
     }
+
+
+def list_admin_users() -> list[dict[str, Any]]:
+    ensure_admin_schema()
+    conn = get_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, username, role, created_at
+                FROM admin_user
+                ORDER BY created_at ASC, id ASC
+                """
+            )
+            return [
+                {
+                    "id": row[0],
+                    "username": row[1],
+                    "role": row[2],
+                    "created_at": row[3].isoformat() if row[3] else None,
+                }
+                for row in cur.fetchall()
+            ]
+    finally:
+        conn.close()
 
 
 def authenticate_admin_user(username: str, password: str) -> dict[str, Any] | None:
@@ -157,7 +221,7 @@ def authenticate_admin_user(username: str, password: str) -> dict[str, Any] | No
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, username, password_hash, created_at
+                SELECT id, username, password_hash, role, created_at
                 FROM admin_user
                 WHERE username = %s
                 """,
@@ -173,7 +237,8 @@ def authenticate_admin_user(username: str, password: str) -> dict[str, Any] | No
     return {
         "id": row[0],
         "username": row[1],
-        "created_at": row[3],
+        "role": row[3],
+        "created_at": row[4],
     }
 
 
@@ -222,6 +287,7 @@ def build_access_token(admin_user: dict[str, Any], session_started_at: datetime 
     payload = {
         "sub": admin_user["username"],
         "uid": admin_user["id"],
+        "role": admin_user.get("role", "admin"),
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
         "session_started_at": int(session_started_at.timestamp()),
@@ -271,10 +337,26 @@ def require_admin_user(
     admin_user = {
         "id": payload["uid"],
         "username": payload["sub"],
+        "role": payload.get("role", "admin"),
     }
 
     rotate_admin_cookie_if_needed(response, admin_user, payload)
     return admin_user
+
+
+def require_roles(*allowed_roles: str):
+    normalized_allowed_roles = {normalize_role(role) for role in allowed_roles}
+
+    def dependency(admin_user: dict[str, Any] = Depends(require_admin_user)) -> dict[str, Any]:
+        if admin_user.get("role", "admin") not in normalized_allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This action is not allowed for the current user role.",
+            )
+
+        return admin_user
+
+    return dependency
 
 
 def should_rotate_access_token(payload: dict[str, Any]) -> bool:
@@ -390,5 +472,6 @@ def build_auth_response(admin_user: dict[str, Any]) -> dict[str, Any]:
         "admin": {
             "id": admin_user["id"],
             "username": admin_user["username"],
+            "role": admin_user.get("role", "admin"),
         },
     }

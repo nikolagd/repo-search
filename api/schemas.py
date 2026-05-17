@@ -1,4 +1,9 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+UserRole = Literal["admin", "editor", "viewer"]
 
 
 class SearchRequest(BaseModel):
@@ -14,6 +19,15 @@ class AdminCredentials(BaseModel):
 class AdminUserResponse(BaseModel):
     id: int
     username: str
+    role: UserRole
+
+
+class AdminUserListResponse(AdminUserResponse):
+    created_at: str | None
+
+
+class AdminUserCreateRequest(AdminCredentials):
+    role: UserRole = "viewer"
 
 
 class AuthResponse(BaseModel):

@@ -1,5 +1,7 @@
 import type { FormEvent } from "react";
 import { RefreshCw, Search } from "lucide-react";
+import Button from "./ui/Button";
+import TextField from "./ui/TextField";
 
 interface SearchPanelProps {
   examples: string[];
@@ -22,40 +24,44 @@ export default function SearchPanel({
 }: SearchPanelProps) {
   return (
     <form className="search-panel" onSubmit={onSubmit}>
-      <label htmlFor="query">Search query</label>
-      <textarea
+      <TextField
         id="query"
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
+        label="Search query"
+        multiline
+        onValueChange={onQueryChange}
         rows={4}
+        value={query}
       />
 
       <div className="examples" aria-label="Example queries">
         {examples.map((example) => (
-          <button
+          <Button
             key={example}
-            type="button"
             onClick={() => onQueryChange(example)}
           >
             {example}
-          </button>
+          </Button>
         ))}
       </div>
 
       <div className="controls">
-        <label htmlFor="limit">Results</label>
-        <input
+        <TextField
           id="limit"
+          label="Results"
+          min={1}
+          max={50}
+          onValueChange={(nextLimit) => onLimitChange(Number(nextLimit))}
           type="number"
-          min="1"
-          max="50"
           value={limit}
-          onChange={(event) => onLimitChange(Number(event.target.value))}
         />
-        <button className="primary-action" type="submit" disabled={loading || !query.trim()}>
-          {loading ? <RefreshCw aria-hidden="true" className="spin" size={18} /> : <Search aria-hidden="true" size={18} />}
+        <Button
+          disabled={loading || !query.trim()}
+          icon={loading ? <RefreshCw aria-hidden="true" className="spin" size={18} /> : <Search aria-hidden="true" size={18} />}
+          type="submit"
+          variant="primary"
+        >
           Search
-        </button>
+        </Button>
       </div>
     </form>
   );
