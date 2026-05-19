@@ -1,4 +1,4 @@
-# Repo Search microservice pokretanje
+# Pokretanje
 
 Ovo uputstvo je za pokretanje aplikacije preko Docker Compose-a.
 
