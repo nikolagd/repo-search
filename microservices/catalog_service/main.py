@@ -157,6 +157,8 @@ def ensure_schema() -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
+                CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+
                 CREATE TABLE IF NOT EXISTS repository (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -177,8 +179,12 @@ def ensure_schema() -> None:
                     abstract TEXT,
                     source_url TEXT,
                     date TIMESTAMP WITHOUT TIME ZONE,
-                    oai_identifier TEXT UNIQUE
+                    oai_identifier TEXT UNIQUE,
+                    embedding vector(1024)
                 );
+
+                ALTER TABLE publication
+                    ADD COLUMN IF NOT EXISTS embedding vector(1024);
 
                 CREATE TABLE IF NOT EXISTS publication_author (
                     publication_id INTEGER NOT NULL REFERENCES publication(id) ON DELETE CASCADE,
@@ -190,6 +196,8 @@ def ensure_schema() -> None:
                     ON publication (repository_id);
                 CREATE INDEX IF NOT EXISTS idx_catalog_publication_date
                     ON publication (date);
+                CREATE INDEX IF NOT EXISTS idx_catalog_publication_embedding
+                    ON publication USING ivfflat (embedding vector_cosine_ops);
                 """
             )
         conn.commit()

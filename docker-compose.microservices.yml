@@ -141,6 +141,8 @@ services:
     depends_on:
       db-primary:
         condition: service_healthy
+      catalog-service:
+        condition: service_healthy
       query-service:
         condition: service_healthy
       embedding-service:

@@ -1,16 +1,26 @@
-# Repo Search Microservice Stack
+# Repo Search microservice pokretanje
 
-Ova grana sadrži microservice/SOA verziju aplikacije. Aktivni Docker cluster je definisan u `docker-compose.microservices.yml`; stari monolitni backend je pomeren u `legacy_monolith/backend` samo kao referenca.
+Ovo uputstvo je za pokretanje aplikacije preko Docker Compose-a.
 
-## Šta je potrebno
+Za Kubernetes/Minikube pokretanje pogledati [k8s/README.md](k8s/README.md).
+
+## 1. Preduslovi
+
+Potrebno je:
 
 - Docker Desktop
-- NVIDIA driver
-- Docker GPU podrška, ako se koristi CUDA
+- NVIDIA driver ako se koristi GPU
+- Docker GPU podrška ako se koristi CUDA
 
-## Podešavanje
+Provera GPU-a:
 
-Kopirati env fajl:
+```powershell
+nvidia-smi
+```
+
+## 2. Podešavanje `.env` fajla
+
+Kopirati primer konfiguracije:
 
 ```powershell
 copy .env.microservices.example .env.microservices
@@ -18,88 +28,91 @@ copy .env.microservices.example .env.microservices
 
 U `.env.microservices` promeniti bar ove vrednosti:
 
-- `API_TOKEN`
-- `ADMIN_JWT_SECRET`
-- `DB_PASSWORD`
-- `DB_REPLICATION_PASSWORD`
+```text
+API_TOKEN
+ADMIN_JWT_SECRET
+DB_PASSWORD
+DB_REPLICATION_PASSWORD
+```
 
-## Pokretanje
+## 3. Pokretanje aplikacije
 
-Pokrenuti microservice cluster:
+Pokrenuti sve kontejnere:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml up --build -d
 ```
 
-Ollama model treba povući jednom u novi cluster:
-
-```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
-```
-
-Adrese:
-
-- Frontend: `http://localhost:8091`
-- API gateway health: `http://localhost:8090/api/health`
-- Ollama API za ovaj cluster: `http://localhost:11435`
-
-## Servisi
-
-Backend je razbijen na sledeće servise:
-
-- `gateway`: API gateway kompatibilan sa postojećim frontend rutama pod `/api`
-- `auth-service`: admin login, JWT cookie, rotacija sesije i CSRF validacija
-- `catalog-service`: repozitorijumi, publikacije, autori i katalog statistika
-- `search-service`: pgvector search read model i rangiranje rezultata
-- `query-service`: parsiranje prirodnog jezika preko Ollama/LLM servisa
-- `embedding-service`: SentenceTransformer embedding model
-- `job-service`: stanje harvest/backfill poslova
-- `job-worker`: background worker za harvest i embedding backfill
-
-## Baza podataka
-
-Po zahtevu kursa, svi servisi koriste jednu deljenu PostgreSQL/pgvector bazu:
-
-- `db-primary`: primarna baza u koju servisi upisuju i iz koje čitaju
-- `db-replica`: streaming replika primarne baze
-
-Servisi su i dalje razdvojeni po logici i pokreću se kao zasebni kontejneri, ali dele istu bazu. To znači da ovo nije stroga database-per-service arhitektura; ovo je prirodna dekompozicija monolita na servise uz centralizovanu perzistenciju.
-
-Replika služi kao demonstracija produkcionog obrasca sa primarnom bazom i read-only kopijom. Aplikacioni servisi trenutno koriste `db-primary`; `db-replica` se može koristiti za čitanje, analitiku ili backup scenarije.
-
-## Korisne komande
-
-Status kontejnera:
+Proveriti status:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
 ```
 
-Logovi:
+## 4. Ollama model
+
+Model treba povući jednom nakon prvog pokretanja:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f gateway
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f catalog-service
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f search-service
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f job-worker
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
 ```
 
-Lista Ollama modela:
+Proveriti modele:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
 ```
 
-Provera da li Ollama model koristi GPU:
+## 5. Otvaranje aplikacije
+
+Frontend:
+
+```text
+http://localhost:8091
+```
+
+Gateway health check:
+
+```powershell
+curl.exe -H "X-API-Key: <API_TOKEN_IZ_ENV_FAJLA>" http://localhost:8090/api/health
+```
+
+Ollama API:
+
+```text
+http://localhost:11435
+```
+
+## 6. Korisne komande
+
+Logovi gateway servisa:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f gateway
+```
+
+Logovi harvest/background workera:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f job-worker
+```
+
+Logovi search servisa:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f search-service
+```
+
+Logovi embedding servisa:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f embedding-service
+```
+
+Provera da li Ollama trenutno koristi model:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama ps
-```
-
-Provera da li je replika u recovery/read-only režimu:
-
-```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec db-replica psql -U repo_search -d repo_search -c "SELECT pg_is_in_recovery();"
 ```
 
 Provera GPU zauzeća:
@@ -108,30 +121,52 @@ Provera GPU zauzeća:
 nvidia-smi
 ```
 
-## Zaustavljanje
+## 7. Osnovni troubleshooting
 
-Zaustaviti microservice cluster, bez brisanja podataka:
+Ako frontend ne radi, proveriti kontejnere:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
+```
+
+Ako neki servis nije `running` ili `healthy`, proveriti njegove logove:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f <ime-servisa>
+```
+
+Ako login ili API pozivi ne rade, proveriti da li je `API_TOKEN` isti u `.env.microservices` i u zahtevu:
+
+```powershell
+curl.exe -H "X-API-Key: <API_TOKEN_IZ_ENV_FAJLA>" http://localhost:8090/api/health
+```
+
+Ako query/search ne radi zbog Ollama modela, proveriti i povući model:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
+```
+
+Ako embedding radi sporo, proveriti GPU:
+
+```powershell
+nvidia-smi
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f embedding-service
+```
+
+## 8. Zaustavljanje
+
+Zaustaviti kontejnere bez brisanja podataka:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml down
 ```
 
-`down -v` koristiti samo ako namerno brišeš microservice volume podatke.
+Zaustaviti i obrisati volume podatke:
 
-## Legacy monolit
-
-Stari monolitni backend je arhiviran u:
-
-```text
-legacy_monolith/backend
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml down -v
 ```
 
-Tu se nalaze raniji `api`, `etl`, `search`, `embeddings`, `migrations`, `Dockerfile.api` i `test_search.py`. Oni nisu kopirani u microservice Docker image i microservice kod ih ne importuje.
-
-Stari monolitni Compose fajl je pomeren u:
-
-```text
-legacy_monolith/docker-compose.monolith.yml
-```
-
-Na ovoj grani taj fajl služi samo kao referenca. Aktivno pokretanje ide preko `docker-compose.microservices.yml`.
+`down -v` koristiti samo kada namerno želiš čisto pokretanje bez prethodnih podataka.

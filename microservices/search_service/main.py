@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from microservices.common.config import service_url
@@ -26,16 +26,7 @@ RANKING_PHRASE_BOOST = float(os.getenv("SEARCH_RANKING_PHRASE_BOOST", "0.02"))
 QUERY_COVERAGE_BOOST = float(os.getenv("SEARCH_QUERY_COVERAGE_BOOST", "0.003"))
 
 
-class SearchPublicationUpsertRequest(BaseModel):
-    id: int
-    repository_id: int
-    repository_name: str | None = None
-    title: str | None = None
-    abstract: str | None = None
-    source_url: str | None = None
-    date: str | None = None
-    oai_identifier: str | None = None
-    authors: list[str] = []
+class PublicationEmbeddingRequest(BaseModel):
     embedding: list[float] | None = None
 
 
@@ -50,8 +41,16 @@ def serialize_datetime(value: Any) -> str | None:
 def normalize_date(date_str: str | None) -> datetime | None:
     if not date_str:
         return None
+
+    normalized = date_str.replace("Z", "").strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m", "%Y"):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+
     try:
-        return datetime.fromisoformat(date_str.replace("Z", ""))
+        return datetime.fromisoformat(normalized)
     except ValueError:
         return None
 
@@ -64,23 +63,26 @@ def ensure_schema() -> None:
                 """
                 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
-                CREATE TABLE IF NOT EXISTS publication_search (
-                    id INTEGER PRIMARY KEY,
-                    repository_id INTEGER NOT NULL,
-                    repository_name TEXT,
-                    title TEXT,
-                    abstract TEXT,
-                    source_url TEXT,
-                    date TIMESTAMP WITHOUT TIME ZONE,
-                    oai_identifier TEXT,
-                    authors TEXT[] NOT NULL DEFAULT '{}',
-                    embedding vector(1024)
-                );
+                ALTER TABLE publication
+                    ADD COLUMN IF NOT EXISTS embedding vector(1024);
 
-                CREATE INDEX IF NOT EXISTS idx_publication_search_date
-                    ON publication_search (date);
-                CREATE INDEX IF NOT EXISTS idx_publication_search_embedding
-                    ON publication_search USING ivfflat (embedding vector_cosine_ops);
+                DO $$
+                BEGIN
+                    IF to_regclass('public.publication_search') IS NOT NULL THEN
+                        UPDATE publication p
+                        SET embedding = ps.embedding
+                        FROM publication_search ps
+                        WHERE p.id = ps.id
+                          AND p.embedding IS NULL
+                          AND ps.embedding IS NOT NULL;
+
+                        DROP TABLE publication_search;
+                    END IF;
+                END
+                $$;
+
+                CREATE INDEX IF NOT EXISTS idx_catalog_publication_embedding
+                    ON publication USING ivfflat (embedding vector_cosine_ops);
                 """
             )
         conn.commit()
@@ -151,11 +153,11 @@ def phrase_boost(title: str | None, abstract: str | None, phrases: list[str], ti
 
 def fetch_vector_results(query_vector: list[float], limit: int, year_from: int | None, year_to: int | None) -> list[tuple[Any, ...]]:
     sql = """
-        SELECT id, title, abstract, source_url, date,
-               embedding <=> %s::vector AS cosine_distance,
-               repository_name, authors
-        FROM publication_search
-        WHERE embedding IS NOT NULL
+        WITH ranked AS (
+            SELECT id, repository_id, title, abstract, source_url, date,
+                   embedding <=> %s::vector AS cosine_distance
+            FROM publication
+            WHERE embedding IS NOT NULL
     """
     params: list[Any] = [query_vector]
 
@@ -167,7 +169,25 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
         sql += " AND date <= %s"
         params.append(f"{year_to}-12-31")
 
-    sql += " ORDER BY cosine_distance ASC LIMIT %s"
+    sql += """
+            ORDER BY cosine_distance ASC
+            LIMIT %s
+        )
+        SELECT ranked.id, ranked.title, ranked.abstract, ranked.source_url, ranked.date,
+               ranked.cosine_distance, r.name,
+               COALESCE(
+                   ARRAY_AGG(a.full_name ORDER BY a.full_name)
+                       FILTER (WHERE a.full_name IS NOT NULL),
+                   '{}'
+               ) AS authors
+        FROM ranked
+        LEFT JOIN repository r ON r.id = ranked.repository_id
+        LEFT JOIN publication_author pa ON pa.publication_id = ranked.id
+        LEFT JOIN author a ON a.id = pa.author_id
+        GROUP BY ranked.id, ranked.title, ranked.abstract, ranked.source_url, ranked.date,
+                 ranked.cosine_distance, r.name
+        ORDER BY ranked.cosine_distance ASC
+    """
     params.append(limit)
 
     conn = get_connection()
@@ -271,7 +291,7 @@ def embedding_status() -> dict[str, int]:
                     COUNT(*),
                     COUNT(*) FILTER (WHERE embedding IS NOT NULL),
                     COUNT(*) FILTER (WHERE embedding IS NULL)
-                FROM publication_search
+                FROM publication
                 """
             )
             indexed, with_embeddings, missing = cur.fetchone()
@@ -285,42 +305,23 @@ def embedding_status() -> dict[str, int]:
     }
 
 
-@app.post("/publications", dependencies=[Depends(require_api_token)])
-def upsert_publication(request: SearchPublicationUpsertRequest) -> dict[str, str]:
+@app.post("/publications/{publication_id}/embedding", dependencies=[Depends(require_api_token)])
+def upsert_publication_embedding(publication_id: int, request: PublicationEmbeddingRequest) -> dict[str, str]:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO publication_search (
-                    id, repository_id, repository_name, title, abstract, source_url,
-                    date, oai_identifier, authors, embedding
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET
-                    repository_id = EXCLUDED.repository_id,
-                    repository_name = EXCLUDED.repository_name,
-                    title = EXCLUDED.title,
-                    abstract = EXCLUDED.abstract,
-                    source_url = EXCLUDED.source_url,
-                    date = EXCLUDED.date,
-                    oai_identifier = EXCLUDED.oai_identifier,
-                    authors = EXCLUDED.authors,
-                    embedding = EXCLUDED.embedding
+                UPDATE publication
+                SET embedding = %s
+                WHERE id = %s
                 """,
-                (
-                    request.id,
-                    request.repository_id,
-                    request.repository_name,
-                    request.title,
-                    request.abstract,
-                    request.source_url,
-                    normalize_date(request.date),
-                    request.oai_identifier,
-                    request.authors,
-                    request.embedding,
-                ),
+                (request.embedding, publication_id),
             )
+
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publication was not found.")
+
         conn.commit()
         return {"status": "ok"}
     except Exception:

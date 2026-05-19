@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: repo-search-config
+  namespace: repo-search
+data:
+  DB_NAME: repo_search
+  DB_USER: repo_search
+  DB_PORT: "5432"
+  DB_HOST: db-primary
+  DB_REPLICATION_USER: replicator
+  ADMIN_JWT_EXPIRY_MINUTES: "120"
+  ADMIN_JWT_ROTATION_INTERVAL_MINUTES: "15"
+  ADMIN_JWT_MAX_SESSION_MINUTES: "720"
+  ADMIN_COOKIE_SECURE: "false"
+  AUTH_SERVICE_URL: http://auth-service:8000
+  CATALOG_SERVICE_URL: http://catalog-service:8000
+  SEARCH_SERVICE_URL: http://search-service:8000
+  QUERY_SERVICE_URL: http://query-service:8000
+  EMBEDDING_SERVICE_URL: http://embedding-service:8000
+  JOB_SERVICE_URL: http://job-service:8000
+  LLM_PROVIDER: ollama
+  LLM_URL: http://ollama:11434/api/generate
+  LLM_MODEL: llama3.1:8b
+  LLM_TIMEOUT: "60"
+  WORKER_POLL_INTERVAL_SECONDS: "5"
+  HARVEST_OUTPUT_DIR: /app/data
+  HF_HUB_OFFLINE: "0"
+  OLLAMA_HOST: 0.0.0.0:11434
+  OLLAMA_KEEP_ALIVE: 30m
+  API_UPSTREAM: http://gateway:8000
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-search-secret
+  namespace: repo-search
+type: Opaque
+stringData:
+  API_TOKEN: replace_with_a_long_random_local_token
+  ADMIN_JWT_SECRET: replace_with_a_different_long_random_admin_jwt_secret
+  DB_PASSWORD: repo_search_password
+  DB_REPLICATION_PASSWORD: repo_search_replication_password
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-replication-scripts
+  namespace: repo-search
+data:
+  init-primary-replication.sh: |
+    #!/bin/sh
+    set -eu
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    DO \$\$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_roles WHERE rolname = '${POSTGRES_REPLICATION_USER}'
+        ) THEN
+            CREATE ROLE ${POSTGRES_REPLICATION_USER}
+                WITH REPLICATION LOGIN PASSWORD '${POSTGRES_REPLICATION_PASSWORD}';
+        END IF;
+    END
+    \$\$;
+    EOSQL
+
+    echo "host replication ${POSTGRES_REPLICATION_USER} all md5" >> "$PGDATA/pg_hba.conf"
+  start-replica.sh: |
+    #!/bin/sh
+    set -eu
+
+    if [ "$(id -u)" = "0" ]; then
+        mkdir -p "$PGDATA"
+        chown -R postgres:postgres "$PGDATA"
+        exec gosu postgres "$0"
+    fi
+
+    if [ ! -s "$PGDATA/PG_VERSION" ]; then
+        rm -rf "$PGDATA"/*
+        until pg_isready -h "$POSTGRES_PRIMARY_HOST" -p "${POSTGRES_PRIMARY_PORT:-5432}" -U "$POSTGRES_USER"; do
+            sleep 2
+        done
+
+        PGPASSWORD="$POSTGRES_REPLICATION_PASSWORD" pg_basebackup \
+            -h "$POSTGRES_PRIMARY_HOST" \
+            -p "${POSTGRES_PRIMARY_PORT:-5432}" \
+            -D "$PGDATA" \
+            -U "$POSTGRES_REPLICATION_USER" \
+            -Fp \
+            -Xs \
+            -P \
+            -R
+    fi
+
+    exec docker-entrypoint.sh postgres
+

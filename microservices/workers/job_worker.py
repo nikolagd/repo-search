@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,9 @@ def claim_next_job() -> dict[str, Any] | None:
         if row is None:
             return None
         return {"id": row[0], "job_type": row[1], "repository_id": row[2]}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -96,8 +100,8 @@ def sync_publication_to_search(publication: dict[str, Any]) -> None:
 
     request_json(
         "POST",
-        f"{SEARCH_SERVICE_URL}/publications",
-        json={**publication, "embedding": embedding},
+        f"{SEARCH_SERVICE_URL}/publications/{publication['id']}/embedding",
+        json={"embedding": embedding},
     )
 
 
@@ -210,7 +214,13 @@ def run_job(job: dict[str, Any]) -> None:
 
 def main() -> None:
     while True:
-        job = claim_next_job()
+        try:
+            job = claim_next_job()
+        except Exception as exc:
+            print(f"Worker poll failed: {exc}", file=sys.stderr, flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
         if job is None:
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
