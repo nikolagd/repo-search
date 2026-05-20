@@ -292,7 +292,28 @@ kubectl -n repo-search rollout restart deployment/catalog-service
 kubectl -n repo-search rollout restart deployment/job-worker
 ```
 
-## 9. Brisanje
+## 9. Zaustavljanje
+
+Zaustaviti Minikube klaster bez brisanja podataka:
+
+```powershell
+minikube stop -p repo-search
+```
+
+Ovo zaustavlja Minikube container i sve Kubernetes podove/servise. Minikube profil i volume-i
+ostaju na disku, tako da podaci iz baze ostaju sačuvani.
+
+Ponovno pokretanje istog klastera:
+
+```powershell
+minikube start -p repo-search
+kubectl config use-context repo-search
+kubectl -n repo-search get pods
+```
+
+Ako koristiš Docker Compose umesto Kubernetes-a, zaustavljanje je u glavnom README fajlu.
+
+## 10. Brisanje
 
 Obrisati aplikaciju i lokalne Kubernetes podatke:
 
