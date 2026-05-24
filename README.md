@@ -1,128 +1,118 @@
-# Harvest i pretraga repozitorijuma
+# Pokretanje
 
-Aplikacija se pokreće preko Docker Compose-a. Compose startuje:
+Ovo uputstvo je za pokretanje aplikacije preko Docker Compose-a.
 
-- PostgreSQL sa `pgvector` ekstenzijom
-- FastAPI backend
-- React frontend kroz nginx
-- Ollama za LLM parsiranje upita
+Za Kubernetes/Minikube pokretanje pogledati [k8s/README.md](k8s/README.md).
 
-PostgreSQL podaci se čuvaju u `./data/postgres`. Ollama modeli se čuvaju u Docker volume-u `repo-search_ollama_data`. `docker compose down` ne briše ni bazu ni Ollama modele.
+## 1. Preduslovi
 
-## Šta je potrebno
+Potrebno je:
 
 - Docker Desktop
-- NVIDIA driver
-- Docker GPU podrška, ako se koristi CUDA
+- NVIDIA driver ako se koristi GPU
+- Docker GPU podrška ako se koristi CUDA
 
-## Podešavanje
-
-Napraviti env fajl:
+Provera GPU-a:
 
 ```powershell
-copy .env.docker.example .env.docker
+nvidia-smi
 ```
 
-U `.env.docker` promeniti bar ove vrednosti:
+## 2. Podešavanje `.env` fajla
 
-- `API_TOKEN`
-- `ADMIN_JWT_SECRET`
-- `DB_PASSWORD`
-- `OAI_BASE_URL`, ako se koristi drugi OAI endpoint
-
-Podrazumevani Ollama model je:
-
-```env
-LLM_MODEL=llama3.1:8b
-```
-
-GPU podešavanja su već uključena:
-
-```env
-NVIDIA_VISIBLE_DEVICES=all
-NVIDIA_DRIVER_CAPABILITIES=compute,utility
-OLLAMA_KEEP_ALIVE=30m
-```
-
-## Pokretanje
-
-Pokrenuti ceo stack:
+Kopirati primer konfiguracije:
 
 ```powershell
-docker compose --env-file .env.docker up --build -d
+copy .env.microservices.example .env.microservices
 ```
 
-Prvi put povući Ollama model:
+U `.env.microservices` promeniti bar ove vrednosti:
 
-```powershell
-docker compose --env-file .env.docker exec ollama ollama pull llama3.1:8b
+```text
+API_TOKEN
+ADMIN_JWT_SECRET
+DB_PASSWORD
+DB_REPLICATION_PASSWORD
 ```
 
-Model ostaje sačuvan u Docker volume-u, pa se ne skida ponovo posle restartovanja kontejnera.
+## 3. Pokretanje aplikacije
 
-Aplikacija je dostupna na:
-
-- `http://localhost:8080`
-- API provera: `http://localhost:8080/api/health`
-- Ollama API: `http://localhost:11434`
-
-## Zaustavljanje
-
-Zaustaviti kontejnere, bez brisanja podataka:
+Pokrenuti sve kontejnere:
 
 ```powershell
-docker compose --env-file .env.docker down
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml up --build -d
 ```
 
-Ponovno pokretanje:
+Proveriti status:
 
 ```powershell
-docker compose --env-file .env.docker up -d
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
 ```
 
-Ne koristiti `down -v` osim ako namerno treba obrisati Docker volume-e. Time se briše i Ollama model.
+## 4. Ollama model
 
-## Korisne komande
-
-Status kontejnera:
+Model treba povući jednom nakon prvog pokretanja:
 
 ```powershell
-docker compose --env-file .env.docker ps
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
 ```
 
-Logovi:
+Proveriti modele:
 
 ```powershell
-docker compose --env-file .env.docker logs -f api
-docker compose --env-file .env.docker logs -f frontend
-docker compose --env-file .env.docker logs -f db
-docker compose --env-file .env.docker logs -f ollama
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
 ```
 
-Ulazak u kontejner:
+## 5. Otvaranje aplikacije
 
-```powershell
-docker compose --env-file .env.docker exec api bash
-docker compose --env-file .env.docker exec db bash
-docker compose --env-file .env.docker exec ollama bash
+Frontend:
+
+```text
+http://localhost:8091
 ```
 
-Pristup bazi:
+Gateway health check:
 
 ```powershell
-docker compose --env-file .env.docker exec db psql -U repo_search -d repo_search
+curl.exe -H "X-API-Key: <API_TOKEN_IZ_ENV_FAJLA>" http://localhost:8090/api/health
 ```
 
-Lista Ollama modela:
+Ollama API:
 
-```powershell
-docker compose --env-file .env.docker exec ollama ollama list
+```text
+http://localhost:11435
 ```
 
-Provera da li Ollama model koristi GPU:
+## 6. Korisne komande
+
+Logovi gateway servisa:
 
 ```powershell
-docker compose --env-file .env.docker exec ollama ollama ps
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f gateway
+```
+
+Logovi harvest/background workera:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f job-worker
+```
+
+Logovi search servisa:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f search-service
+```
+
+Logovi embedding servisa:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f embedding-service
+```
+
+Provera da li Ollama trenutno koristi model:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama ps
 ```
 
 Provera GPU zauzeća:
@@ -131,49 +121,52 @@ Provera GPU zauzeća:
 nvidia-smi
 ```
 
-## Troubleshooting
+## 7. Osnovni troubleshooting
 
-Ako API nije up:
+Ako frontend ne radi, proveriti kontejnere:
 
 ```powershell
-docker compose --env-file .env.docker logs --tail 100 api
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
 ```
 
-Ako se frontend otvara, ali API pozivi ne rade:
+Ako neki servis nije `running` ili `healthy`, proveriti njegove logove:
 
 ```powershell
-curl.exe http://localhost:8080/api/health
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f <ime-servisa>
 ```
 
-Ako pretraga ne radi, proveriti da li je Ollama model prisutan:
+Ako login ili API pozivi ne rade, proveriti da li je `API_TOKEN` isti u `.env.microservices` i u zahtevu:
 
 ```powershell
-docker compose --env-file .env.docker exec ollama ollama list
+curl.exe -H "X-API-Key: <API_TOKEN_IZ_ENV_FAJLA>" http://localhost:8090/api/health
 ```
 
-Ako model nije prisutan:
+Ako query/search ne radi zbog Ollama modela, proveriti i povući model:
 
 ```powershell
-docker compose --env-file .env.docker exec ollama ollama pull llama3.1:8b
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
 ```
 
-Ako izgleda kao da Ollama koristi RAM umesto VRAM-a:
+Ako embedding radi sporo, proveriti GPU:
 
 ```powershell
-docker compose --env-file .env.docker exec ollama ollama ps
 nvidia-smi
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f embedding-service
 ```
 
-`ollama ps` treba da prikaže `100% GPU`. Na Windows-u Task Manager ne prikazuje uvek jasno Docker/WSL VRAM zauzeće, pa su `ollama ps` i `nvidia-smi` pouzdaniji.
+## 8. Zaustavljanje
 
-Ako embedding model ne koristi CUDA:
+Zaustaviti kontejnere bez brisanja podataka:
 
 ```powershell
-docker compose --env-file .env.docker exec api python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml down
 ```
 
-Ako podaci iz baze nestanu, proveriti da postoji `./data/postgres` i da stack nije zaustavljen sa:
+Zaustaviti i obrisati volume podatke:
 
 ```powershell
-docker compose --env-file .env.docker down -v
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml down -v
 ```
+
+`down -v` koristiti samo kada namerno želiš čisto pokretanje bez prethodnih podataka.

@@ -1,0 +1,534 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache
+  namespace: repo-search
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: harvest-xml-data
+  namespace: repo-search
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import socket
+              import time
+
+              while True:
+                  try:
+                      socket.create_connection(("db-primary", 5432), timeout=5).close()
+                      break
+                  except OSError:
+                      time.sleep(2)
+      containers:
+        - name: auth-service
+          image: repo-search-microservices-auth-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.auth_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: repo-search
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-service
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: catalog-service
+  template:
+    metadata:
+      labels:
+        app: catalog-service
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import socket
+              import time
+
+              while True:
+                  try:
+                      socket.create_connection(("db-primary", 5432), timeout=5).close()
+                      break
+                  except OSError:
+                      time.sleep(2)
+      containers:
+        - name: catalog-service
+          image: repo-search-microservices-catalog-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.catalog_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-service
+  namespace: repo-search
+spec:
+  selector:
+    app: catalog-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-service
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: query-service
+  template:
+    metadata:
+      labels:
+        app: query-service
+    spec:
+      containers:
+        - name: query-service
+          image: repo-search-microservices-query-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.query_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-service
+  namespace: repo-search
+spec:
+  selector:
+    app: query-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-service
+  template:
+    metadata:
+      labels:
+        app: embedding-service
+    spec:
+      containers:
+        - name: embedding-service
+          image: repo-search-microservices-embedding-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.embedding_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+            initialDelaySeconds: 60
+            periodSeconds: 10
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-service
+  namespace: repo-search
+spec:
+  selector:
+    app: embedding-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-service
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: search-service
+  template:
+    metadata:
+      labels:
+        app: search-service
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import socket
+              import time
+
+              while True:
+                  try:
+                      socket.create_connection(("db-primary", 5432), timeout=5).close()
+                      break
+                  except OSError:
+                      time.sleep(2)
+        - name: wait-for-search-dependencies
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import os
+              import time
+
+              import requests
+
+              token = os.environ["API_TOKEN"]
+              services = [
+                  "http://catalog-service:8000/health",
+                  "http://query-service:8000/health",
+                  "http://embedding-service:8000/health",
+              ]
+
+              while True:
+                  try:
+                      for url in services:
+                          response = requests.get(url, headers={"X-API-Key": token}, timeout=5)
+                          response.raise_for_status()
+                      break
+                  except Exception:
+                      time.sleep(2)
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+      containers:
+        - name: search-service
+          image: repo-search-microservices-search-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.search_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-service
+  namespace: repo-search
+spec:
+  selector:
+    app: search-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-service
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-service
+  template:
+    metadata:
+      labels:
+        app: job-service
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import socket
+              import time
+
+              while True:
+                  try:
+                      socket.create_connection(("db-primary", 5432), timeout=5).close()
+                      break
+                  except OSError:
+                      time.sleep(2)
+      containers:
+        - name: job-service
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.job_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: job-service
+  namespace: repo-search
+spec:
+  selector:
+    app: job-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-worker
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-worker
+  template:
+    metadata:
+      labels:
+        app: job-worker
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import socket
+              import time
+
+              while True:
+                  try:
+                      socket.create_connection(("db-primary", 5432), timeout=5).close()
+                      break
+                  except OSError:
+                      time.sleep(2)
+        - name: wait-for-job-service
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args:
+            - -c
+            - |
+              import os
+              import time
+
+              import requests
+
+              token = os.environ["API_TOKEN"]
+              services = [
+                  "http://job-service:8000/health",
+                  "http://catalog-service:8000/health",
+                  "http://search-service:8000/health",
+                  "http://embedding-service:8000/health",
+              ]
+
+              while True:
+                  try:
+                      for url in services:
+                          response = requests.get(url, headers={"X-API-Key": token}, timeout=5)
+                          response.raise_for_status()
+                      break
+                  except Exception:
+                      time.sleep(2)
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+      containers:
+        - name: job-worker
+          image: repo-search-microservices-job-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python"]
+          args: ["-m", "microservices.workers.job_worker"]
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          volumeMounts:
+            - name: harvest-xml-data
+              mountPath: /app/data
+      volumes:
+        - name: harvest-xml-data
+          persistentVolumeClaim:
+            claimName: harvest-xml-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: repo-search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+        - name: gateway
+          image: repo-search-microservices-gateway:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["microservices.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: repo-search-config
+            - secretRef:
+                name: repo-search-secret
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/api/health"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: repo-search
+spec:
+  selector:
+    app: gateway
+  ports:
+    - port: 8000
+      targetPort: 8000

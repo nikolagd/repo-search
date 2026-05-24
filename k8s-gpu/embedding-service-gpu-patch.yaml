@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: repo-search
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: embedding-service
+          resources:
+            limits:
+              nvidia.com/gpu: "1"

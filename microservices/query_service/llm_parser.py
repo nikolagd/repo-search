@@ -1,0 +1,123 @@
+import json
+import os
+
+import requests
+
+LLM_URL = os.getenv("LLM_URL", "http://localhost:11434/api/generate")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+
+
+def parse_json_response(text: str) -> dict | None:
+    return json.loads(text.strip())
+
+
+def call_ollama_json(prompt: str) -> dict | None:
+    response = requests.post(
+        LLM_URL,
+        json={
+            "model": LLM_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0},
+        },
+        timeout=LLM_TIMEOUT,
+    )
+    response.raise_for_status()
+    return parse_json_response(response.json().get("response", ""))
+
+
+def call_openai_compatible_json(prompt: str) -> dict | None:
+    response = requests.post(
+        LLM_URL,
+        json={
+            "model": LLM_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        },
+        timeout=LLM_TIMEOUT,
+    )
+    response.raise_for_status()
+    return parse_json_response(response.json()["choices"][0]["message"]["content"])
+
+
+def call_llm_json(prompt: str) -> dict | None:
+    if LLM_PROVIDER in {"openai", "openai_compatible", "llama_cpp", "llamacpp"}:
+        return call_openai_compatible_json(prompt)
+    return call_ollama_json(prompt)
+
+
+def parse_query_llm(query: str) -> dict | None:
+    prompt = f"""
+You are the query understanding layer for an academic publication search engine.
+
+Return ONLY valid JSON with this exact shape:
+
+{{
+  "embedding_queries": string[],
+  "topic_phrases": string[],
+  "year_from": integer or null,
+  "year_to": integer or null,
+  "ranking_phrases": string[],
+  "interpreted_query": string
+}}
+
+Rules:
+- embedding_queries are used for vector search.
+- embedding_queries must contain only the research topic, not date constraints.
+- Never include temporal phrases in embedding_queries.
+- Extract dates only into year_from and year_to.
+- For Serbian and English temporal expressions:
+  - words meaning after/later-than set year_from to the year after the mentioned year.
+  - words meaning since/from set year_from to the mentioned year.
+  - words meaning before/older-than/earlier-than set year_to to the year before the mentioned year.
+  - words meaning until/to set year_to to the mentioned year.
+- Return at least 2 and at most 4 embedding_queries when useful.
+- Include a standard academic English version when useful.
+- topic_phrases are the main content phrases for soft ranking.
+- ranking_phrases are only extra user-emphasized phrases.
+- Do not invent or narrow topics that are not in the user query.
+- interpreted_query should briefly explain what you understood.
+
+User query:
+{query}
+"""
+    try:
+        return call_llm_json(prompt)
+    except Exception as exc:
+        print("LLM parser failed:", exc)
+        return None
+
+
+def repair_query_plan(query: str, bad_plan: dict, reason: str) -> dict | None:
+    prompt = f"""
+You repair invalid JSON search plans for an academic publication search engine.
+
+Return ONLY valid JSON with this exact shape:
+
+{{
+  "embedding_queries": string[],
+  "topic_phrases": string[],
+  "year_from": integer or null,
+  "year_to": integer or null,
+  "ranking_phrases": string[],
+  "interpreted_query": string
+}}
+
+Invalid reason:
+{reason}
+
+User query:
+{query}
+
+Bad plan:
+{json.dumps(bad_plan, ensure_ascii=False)}
+"""
+    try:
+        return call_llm_json(prompt)
+    except Exception as exc:
+        print("LLM repair failed:", exc)
+        return None

@@ -1,0 +1,189 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-primary
+  namespace: repo-search
+spec:
+  selector:
+    app: db-primary
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db-primary
+  namespace: repo-search
+spec:
+  serviceName: db-primary
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-primary
+  template:
+    metadata:
+      labels:
+        app: db-primary
+    spec:
+      containers:
+        - name: db-primary
+          image: pgvector/pgvector:pg18
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: repo-search-config
+                  key: DB_NAME
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: repo-search-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: repo-search-secret
+                  key: DB_PASSWORD
+            - name: POSTGRES_REPLICATION_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: repo-search-config
+                  key: DB_REPLICATION_USER
+            - name: POSTGRES_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: repo-search-secret
+                  key: DB_REPLICATION_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: db-primary-data
+              mountPath: /var/lib/postgresql
+            - name: postgres-replication-scripts
+              mountPath: /docker-entrypoint-initdb.d/010-init-primary-replication.sh
+              subPath: init-primary-replication.sh
+              readOnly: true
+      volumes:
+        - name: postgres-replication-scripts
+          configMap:
+            name: postgres-replication-scripts
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: db-primary-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-replica
+  namespace: repo-search
+spec:
+  selector:
+    app: db-replica
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db-replica
+  namespace: repo-search
+spec:
+  serviceName: db-replica
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-replica
+  template:
+    metadata:
+      labels:
+        app: db-replica
+    spec:
+      containers:
+        - name: db-replica
+          image: pgvector/pgvector:pg18
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "/usr/local/bin/start-replica.sh"]
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: repo-search-config
+                  key: DB_NAME
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: repo-search-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: repo-search-secret
+                  key: DB_PASSWORD
+            - name: POSTGRES_PRIMARY_HOST
+              value: db-primary
+            - name: POSTGRES_PRIMARY_PORT
+              value: "5432"
+            - name: POSTGRES_REPLICATION_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: repo-search-config
+                  key: DB_REPLICATION_USER
+            - name: POSTGRES_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: repo-search-secret
+                  key: DB_REPLICATION_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          volumeMounts:
+            - name: db-replica-data
+              mountPath: /var/lib/postgresql
+            - name: postgres-replication-scripts
+              mountPath: /usr/local/bin/start-replica.sh
+              subPath: start-replica.sh
+              readOnly: true
+      volumes:
+        - name: postgres-replication-scripts
+          configMap:
+            name: postgres-replication-scripts
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: db-replica-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
