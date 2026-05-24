@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-build:
+    name: Frontend build
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend application
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify frontend build output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "frontend/dist/index.html")) {
+            Write-Error "Frontend build failed: frontend/dist/index.html was not created."
+          }
+
+          $assets = Get-ChildItem -Path "frontend/dist/assets" -File -ErrorAction SilentlyContinue
+          if (-not $assets) {
+            Write-Error "Frontend build failed: frontend/dist/assets does not contain generated files."
+          }
+
+      - name: Upload frontend build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  backend-static-check:
+    name: Backend static check
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "microservices" -Recurse -Filter "*.py"
+          foreach ($file in $files) {
+            python -c "import ast, pathlib, sys; path = pathlib.Path(sys.argv[1]); ast.parse(path.read_text(encoding='utf-8'), filename=str(path))" $file.FullName
+          }
+
+      - name: Verify microservice compose file
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "docker-compose.microservices.yml")) {
+            Write-Error "docker-compose.microservices.yml is missing."
+          }
+
+  artifact-verification:
+    name: Build artifact verification
+    runs-on: windows-latest
+    needs:
+      - frontend-build
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+
+    steps:
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist
+
+      - name: Verify downloaded artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "frontend-dist/index.html")) {
+            Write-Error "Downloaded artifact is invalid: index.html is missing."
+          }
+
+          $assets = Get-ChildItem -Path "frontend-dist/assets" -File -ErrorAction SilentlyContinue
+          if (-not $assets) {
+            Write-Error "Downloaded artifact is invalid: generated assets are missing."
+          }

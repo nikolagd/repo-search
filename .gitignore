@@ -210,5 +210,6 @@ __marimo__/
 data/*
 backups/*
 docs/*
+!docs/ci-workflow.md
 frontend/node_modules/
 frontend/dist/
