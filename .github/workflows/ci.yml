@@ -15,15 +15,15 @@ permissions:
 jobs:
   frontend-build:
     name: Frontend build
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -50,7 +50,7 @@ jobs:
           }
 
       - name: Upload frontend build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: frontend-dist
           path: frontend/dist
@@ -58,15 +58,15 @@ jobs:
 
   backend-static-check:
     name: Backend static check
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -87,14 +87,14 @@ jobs:
 
   artifact-verification:
     name: Build artifact verification
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     needs:
       - frontend-build
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
 
     steps:
       - name: Download frontend artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: frontend-dist
           path: frontend-dist

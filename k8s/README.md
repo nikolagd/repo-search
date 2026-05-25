@@ -311,7 +311,42 @@ kubectl config use-context repo-search
 kubectl -n repo-search get pods
 ```
 
-Ako koristiš Docker Compose umesto Kubernetes-a, zaustavljanje je u glavnom README fajlu.
+Posle ponovnog pokretanja Minikube-a, ponekad stari podovi ostanu prikazani kao
+`Completed`, `Error` ili `Pending`, posebno ako se GPU/NVIDIA plugin i Cilium još oporavljaju.
+Prvo proveriti da je node spreman i da Kubernetes vidi GPU:
+
+```powershell
+kubectl get nodes
+kubectl describe node repo-search | Select-String nvidia.com/gpu
+kubectl -n kube-system get pods
+```
+
+Ako su sistemski podovi spremni, ali aplikacioni podovi i dalje nisu `1/1 Running`,
+restartovati deployment-e:
+
+```powershell
+kubectl -n repo-search rollout restart deployment
+kubectl -n repo-search rollout status deployment/auth-service --timeout=300s
+kubectl -n repo-search rollout status deployment/catalog-service --timeout=300s
+kubectl -n repo-search rollout status deployment/query-service --timeout=300s
+kubectl -n repo-search rollout status deployment/embedding-service --timeout=300s
+kubectl -n repo-search rollout status deployment/search-service --timeout=300s
+kubectl -n repo-search rollout status deployment/job-service --timeout=300s
+kubectl -n repo-search rollout status deployment/gateway --timeout=300s
+kubectl -n repo-search rollout status deployment/frontend --timeout=300s
+kubectl -n repo-search rollout status deployment/ollama --timeout=300s
+kubectl -n repo-search rollout status deployment/job-worker --timeout=300s
+kubectl -n repo-search get pods
+```
+
+Ako ostane stari pod u `Error` stanju, a postoji novi pod istog servisa koji je `1/1 Running`,
+stari pod se može obrisati:
+
+```powershell
+kubectl -n repo-search delete pod <ime-starog-poda>
+kubectl -n repo-search get pods
+```
+
 
 ## 10. Brisanje
 
