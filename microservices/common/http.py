@@ -1,9 +1,67 @@
+import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
+import requests
 from fastapi import HTTPException, Request, Response
 
+from microservices.common.observability import record_outbound_http_request
 from microservices.common.security import internal_headers
+
+
+def upstream_name(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.hostname or "unknown"
+
+
+async def observed_async_request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    service_name: str,
+    upstream_service: str | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    start = time.perf_counter()
+    status_code = "exception"
+    try:
+        response = await client.request(method, url, **kwargs)
+        status_code = str(response.status_code)
+        return response
+    finally:
+        record_outbound_http_request(
+            service_name=service_name,
+            upstream_service=upstream_service or upstream_name(url),
+            method=method,
+            status_code=status_code,
+            duration_seconds=time.perf_counter() - start,
+        )
+
+
+def observed_sync_request(
+    method: str,
+    url: str,
+    *,
+    service_name: str,
+    upstream_service: str | None = None,
+    **kwargs: Any,
+) -> requests.Response:
+    start = time.perf_counter()
+    status_code = "exception"
+    try:
+        response = requests.request(method, url, **kwargs)
+        status_code = str(response.status_code)
+        return response
+    finally:
+        record_outbound_http_request(
+            service_name=service_name,
+            upstream_service=upstream_service or upstream_name(url),
+            method=method,
+            status_code=status_code,
+            duration_seconds=time.perf_counter() - start,
+        )
 
 
 async def proxy_request(request: Request, base_url: str, path: str) -> Response:
@@ -17,9 +75,12 @@ async def proxy_request(request: Request, base_url: str, path: str) -> Response:
     headers.update(internal_headers())
 
     async with httpx.AsyncClient(timeout=120) as client:
-        upstream = await client.request(
+        upstream = await observed_async_request(
+            client,
             request.method,
             target,
+            service_name=getattr(request.app.state, "service_name", "unknown"),
+            upstream_service=upstream_name(base_url),
             params=request.query_params,
             content=body,
             headers=headers,

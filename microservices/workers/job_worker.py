@@ -7,10 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
+from microservices.common.http import observed_sync_request
+from microservices.common.observability import (
+    record_job_duration,
+    record_job_event,
+    start_worker_observability,
+)
 from microservices.common.security import internal_headers
 from microservices.workers.oai_client import OAINoRecordsMatch, choose_metadata_prefix, fetch_page, get_granularity
 from microservices.workers.parser import parse_oai_xml
@@ -21,12 +25,13 @@ EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-s
 SEARCH_SERVICE_URL = service_url("SEARCH_SERVICE_URL", "http://search-service:8000")
 POLL_INTERVAL_SECONDS = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
 OUTPUT_DIR = Path(os.getenv("HARVEST_OUTPUT_DIR", "/app/data"))
+SERVICE_NAME = "job-worker"
 
 
 def request_json(method: str, url: str, **kwargs) -> Any:
     headers = kwargs.pop("headers", {})
     headers.update(internal_headers())
-    response = requests.request(method, url, headers=headers, timeout=120, **kwargs)
+    response = observed_sync_request(method, url, service_name=SERVICE_NAME, headers=headers, timeout=120, **kwargs)
     response.raise_for_status()
     return response.json() if response.content else None
 
@@ -39,6 +44,7 @@ def claim_next_job() -> dict[str, Any] | None:
                 """
                 UPDATE admin_job
                 SET status = 'running',
+                    started_at = NOW(),
                     message = 'Job started.',
                     updated_at = NOW()
                 WHERE id = (
@@ -186,6 +192,9 @@ def backfill_embeddings() -> int:
 
 
 def run_job(job: dict[str, Any]) -> None:
+    started_at = time.perf_counter()
+    status = "failed"
+    record_job_event(SERVICE_NAME, job["job_type"], "started")
     try:
         if job["job_type"] == "repository_harvest":
             processed = harvest_repository(job)
@@ -195,6 +204,7 @@ def run_job(job: dict[str, Any]) -> None:
                 processed,
                 f"Harvest completed. Processed records: {processed}.",
             )
+            status = "succeeded"
             return
 
         if job["job_type"] == "embedding_backfill":
@@ -205,14 +215,19 @@ def run_job(job: dict[str, Any]) -> None:
                 processed,
                 f"Embedding backfill completed. Embedded records: {processed}.",
             )
+            status = "succeeded"
             return
 
         finish_job(job["id"], "failed", None, f"Unsupported job type: {job['job_type']}")
     except Exception as exc:
         finish_job(job["id"], "failed", None, f"Job failed: {exc}")
+    finally:
+        record_job_event(SERVICE_NAME, job["job_type"], status)
+        record_job_duration(SERVICE_NAME, job["job_type"], status, time.perf_counter() - started_at)
 
 
 def main() -> None:
+    start_worker_observability(SERVICE_NAME)
     while True:
         try:
             job = claim_next_job()

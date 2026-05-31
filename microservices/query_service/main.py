@@ -1,11 +1,13 @@
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
+from microservices.common.observability import observe_query_parse, setup_observability
 from microservices.common.schemas import HealthResponse
 from microservices.common.security import require_api_token
 from microservices.query_service.query_handler import parse_query
 
 app = FastAPI(title="Repo Search Query Service", version="0.1.0")
+setup_observability(app, "query-service")
 
 
 class QueryParseRequest(BaseModel):
@@ -19,4 +21,5 @@ def health() -> HealthResponse:
 
 @app.post("/query/parse", dependencies=[Depends(require_api_token)])
 def parse(request: QueryParseRequest) -> dict:
-    return parse_query(request.query)
+    with observe_query_parse("query-service", "configured"):
+        return parse_query(request.query)

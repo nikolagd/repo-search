@@ -3,6 +3,8 @@ import xml.etree.ElementTree as ET
 
 import requests
 
+from microservices.common.http import observed_sync_request
+
 METADATA_PREFIX = os.getenv("OAI_METADATA_PREFIX", "auto")
 PREFERRED_METADATA_PREFIXES = ["qdc", "dim", "mods", "oai_dc"]
 
@@ -21,7 +23,14 @@ class OAINoRecordsMatch(OAIClientError):
 
 def request_oai(params, base_url):
     try:
-        response = requests.get(base_url, params=params, timeout=60)
+        response = observed_sync_request(
+            "GET",
+            base_url,
+            service_name="job-worker",
+            upstream_service="oai-repository",
+            params=params,
+            timeout=60,
+        )
         response.raise_for_status()
     except requests.RequestException as exc:
         raise OAIClientError(f"OAI request failed: {exc}") from exc

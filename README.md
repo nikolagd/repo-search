@@ -1,16 +1,26 @@
-# Pokretanje
+# Repo Search
 
-Ovo uputstvo je za pokretanje aplikacije preko Docker Compose-a.
+Primarni način pokretanja aplikacije je Kubernetes preko lokalnog Minikube klastera.
 
-Za Kubernetes/Minikube pokretanje pogledati [k8s/README.md](k8s/README.md).
+Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](docs/docker-compose-microservices.md) i treba ga koristiti samo za lokalni smoke test, debugging van Kubernetes-a ili poređenje sa manifestima.
 
 ## 1. Preduslovi
 
 Potrebno je:
 
 - Docker Desktop
+- Minikube
+- kubectl
 - NVIDIA driver ako se koristi GPU
-- Docker GPU podrška ako se koristi CUDA
+
+Instalacija Minikube-a i kubectl-a:
+
+```powershell
+winget install Kubernetes.minikube
+winget install Kubernetes.kubectl
+```
+
+Pokrenuti Docker Desktop pre pokretanja Minikube-a.
 
 Provera GPU-a:
 
@@ -18,155 +28,342 @@ Provera GPU-a:
 nvidia-smi
 ```
 
-## 2. Podešavanje `.env` fajla
+## 2. Pokretanje Minikube klastera
 
-Kopirati primer konfiguracije:
+CPU verzija:
 
 ```powershell
-copy .env.microservices.example .env.microservices
+minikube start --driver=docker --profile repo-search
+kubectl config use-context repo-search
 ```
 
-U `.env.microservices` promeniti bar ove vrednosti:
+GPU verzija:
+
+U Docker Desktop-u proveriti da je NVIDIA runtime dostupan i postavljen kao default runtime:
 
 ```text
-API_TOKEN
-ADMIN_JWT_SECRET
-DB_PASSWORD
-DB_REPLICATION_PASSWORD
+Docker Desktop -> Settings -> Docker Engine
 ```
 
-## 3. Pokretanje aplikacije
+U JSON konfiguraciji dodati ili proveriti ovaj deo:
 
-Pokrenuti sve kontejnere:
+```json
+{
+  "default-runtime": "nvidia",
+  "runtimes": {
+    "nvidia": {
+      "path": "nvidia-container-runtime",
+      "runtimeArgs": []
+    }
+  }
+}
+```
+
+Sačuvati promenu i restartovati Docker Desktop. Zatim napraviti novi Minikube klaster sa GPU podrškom:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml up --build -d
+minikube delete --profile repo-search
+minikube start --driver=docker --container-runtime=docker --gpus=all --cni=cilium --profile repo-search --cpus=4 --memory=12000 --disk-size=20000mb
+kubectl config use-context repo-search
+minikube addons enable nvidia-device-plugin -p repo-search
+kubectl -n kube-system rollout status daemonset/nvidia-device-plugin-daemonset --timeout=180s
 ```
 
-Proveriti status:
+Provera da li Kubernetes vidi GPU:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
+kubectl describe node repo-search | Select-String nvidia.com/gpu
 ```
 
-## 4. Ollama model
+## 3. Metrics server
 
-Model treba povući jednom nakon prvog pokretanja:
+`metrics-server` je Kubernetes sloj za CPU/memory metrike, `kubectl top` i kasnije HPA pravila.
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
+minikube addons enable metrics-server -p repo-search
+kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
+kubectl top nodes
 ```
+
+Prometheus, Grafana, kube-state-metrics, node-exporter i Postgres exporter su deo Kubernetes manifesta u `k8s/05-observability.yaml`.
+GPU overlay `k8s-gpu/` dodaje DCGM exporter za NVIDIA GPU metrike.
+
+## 4. Build image-a unutar Minikube-a
+
+Usmeriti PowerShell na Minikube Docker daemon:
+
+```powershell
+& minikube -p repo-search docker-env --shell powershell | Invoke-Expression
+```
+
+Build backend image-a:
+
+```powershell
+docker build -f Dockerfile.microservice `
+  --build-arg PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu130 `
+  -t repo-search-microservices-auth-service:latest `
+  -t repo-search-microservices-catalog-service:latest `
+  -t repo-search-microservices-search-service:latest `
+  -t repo-search-microservices-query-service:latest `
+  -t repo-search-microservices-embedding-service:latest `
+  -t repo-search-microservices-job-service:latest `
+  -t repo-search-microservices-gateway:latest `
+  .
+```
+
+Build frontend image-a:
+
+```powershell
+docker build -f frontend/Dockerfile -t repo-search-microservices-frontend:latest .
+```
+
+## 5. Deploy
+
+CPU deploy:
+
+```powershell
+kubectl apply -k k8s/
+```
+
+GPU deploy:
+
+```powershell
+kubectl apply -k k8s-gpu/
+```
+
+Sačekati rollout:
+
+```powershell
+kubectl -n repo-search rollout status statefulset/db-primary --timeout=180s
+kubectl -n repo-search rollout status statefulset/db-replica --timeout=180s
+kubectl -n repo-search rollout status deployment/auth-service --timeout=300s
+kubectl -n repo-search rollout status deployment/catalog-service --timeout=300s
+kubectl -n repo-search rollout status deployment/query-service --timeout=300s
+kubectl -n repo-search rollout status deployment/embedding-service --timeout=300s
+kubectl -n repo-search rollout status deployment/search-service --timeout=300s
+kubectl -n repo-search rollout status deployment/job-service --timeout=300s
+kubectl -n repo-search rollout status deployment/gateway --timeout=300s
+kubectl -n repo-search rollout status deployment/frontend --timeout=300s
+kubectl -n repo-search rollout status deployment/ollama --timeout=300s
+kubectl -n repo-search rollout status deployment/job-worker --timeout=300s
+kubectl -n repo-search rollout status deployment/prometheus --timeout=180s
+kubectl -n repo-search rollout status deployment/grafana --timeout=180s
+kubectl -n repo-search rollout status deployment/postgres-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/kube-state-metrics --timeout=180s
+kubectl -n repo-search rollout status daemonset/node-exporter --timeout=180s
+kubectl -n repo-search rollout status daemonset/dcgm-exporter --timeout=180s
+```
+
+Proveriti podove:
+
+```powershell
+kubectl -n repo-search get pods
+```
+
+Ako su image-i rebuildovani sa istim `:latest` tagovima, restartovati deployment-e:
+
+```powershell
+kubectl -n repo-search rollout restart deployment/auth-service
+kubectl -n repo-search rollout restart deployment/catalog-service
+kubectl -n repo-search rollout restart deployment/query-service
+kubectl -n repo-search rollout restart deployment/embedding-service
+kubectl -n repo-search rollout restart deployment/search-service
+kubectl -n repo-search rollout restart deployment/job-service
+kubectl -n repo-search rollout restart deployment/gateway
+kubectl -n repo-search rollout restart deployment/frontend
+kubectl -n repo-search rollout restart deployment/ollama
+kubectl -n repo-search rollout restart deployment/job-worker
+```
+
+## 6. Ollama model
 
 Proveriti modele:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
+kubectl -n repo-search exec deployment/ollama -- ollama list
 ```
 
-## 5. Otvaranje aplikacije
+Povući model ako nije već prisutan:
 
-Frontend:
+```powershell
+kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+```
+
+## 7. Otvaranje aplikacije
+
+Pokrenuti Minikube service tunnel:
+
+```powershell
+minikube service frontend -n repo-search -p repo-search
+```
+
+Na Windows-u obično radi adresa koju komanda prikaže sa `127.0.0.1`.
+
+Može se proveriti i NodePort adresa:
+
+```powershell
+minikube ip -p repo-search
+```
+
+Otvoriti:
 
 ```text
-http://localhost:8091
+http://<minikube-ip>:30091
 ```
 
 Gateway health check:
 
 ```powershell
-curl.exe -H "X-API-Key: <API_TOKEN_IZ_ENV_FAJLA>" http://localhost:8090/api/health
+kubectl -n repo-search port-forward service/gateway 8090:8000
+curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/health
 ```
 
-Ollama API:
+## 8. Observability
+
+Prometheus, Grafana, Postgres exporter, kube-state-metrics i node-exporter se deploy-uju kroz `k8s/05-observability.yaml`.
+GPU deploy kroz `k8s-gpu/` dodaje i DCGM exporter.
+
+Otvaranje Prometheus-a:
+
+```powershell
+kubectl -n repo-search port-forward service/prometheus 9090:9090
+```
+
+Zatim otvoriti:
 
 ```text
-http://localhost:11435
+http://localhost:9090
 ```
 
-## 6. Korisne komande
-
-Logovi gateway servisa:
+Otvaranje Grafana-e:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f gateway
+kubectl -n repo-search port-forward service/grafana 3000:3000
 ```
 
-Logovi harvest/background workera:
+Zatim otvoriti:
+
+```text
+http://localhost:3000
+```
+
+Podrazumevani Grafana login:
+
+```text
+admin / admin
+```
+
+Proveriti Prometheus targets:
+
+```text
+http://localhost:9090/targets
+```
+
+Detalji su u [docs/observability.md](docs/observability.md).
+
+## 9. Korisne komande
+
+Lista podova:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f job-worker
+kubectl -n repo-search get pods
 ```
 
-Logovi search servisa:
+Lista servisa:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f search-service
+kubectl -n repo-search get services
 ```
 
-Logovi embedding servisa:
+Logovi:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f embedding-service
+kubectl -n repo-search logs deployment/gateway -f
+kubectl -n repo-search logs deployment/search-service -f
+kubectl -n repo-search logs deployment/embedding-service -f
+kubectl -n repo-search logs deployment/job-worker -f
+kubectl -n repo-search logs deployment/prometheus -f
+kubectl -n repo-search logs deployment/grafana -f
 ```
 
-Provera da li Ollama trenutno koristi model:
+Provera GPU-a u embedding podu:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama ps
+kubectl -n repo-search exec deployment/embedding-service -- python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
 
-Provera GPU zauzeća:
+Provera Kubernetes resource metrika:
 
 ```powershell
-nvidia-smi
+kubectl top pods -n repo-search
+kubectl top nodes
 ```
 
-## 7. Osnovni troubleshooting
+## 10. Troubleshooting
 
-Ako frontend ne radi, proveriti kontejnere:
+Ako podovi nisu spremni:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
+kubectl -n repo-search get pods
+kubectl -n repo-search describe pod <ime-poda>
 ```
 
-Ako neki servis nije `running` ili `healthy`, proveriti njegove logove:
+Ako servis pada ili je u `CrashLoopBackOff` stanju:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f <ime-servisa>
+kubectl -n repo-search logs <ime-poda> --previous
+kubectl -n repo-search logs <ime-poda>
 ```
 
-Ako login ili API pozivi ne rade, proveriti da li je `API_TOKEN` isti u `.env.microservices` i u zahtevu:
+Ako frontend URL sa Minikube IP adresom ne radi na Windows-u:
 
 ```powershell
-curl.exe -H "X-API-Key: <API_TOKEN_IZ_ENV_FAJLA>" http://localhost:8090/api/health
+minikube service frontend -n repo-search -p repo-search
 ```
 
-Ako query/search ne radi zbog Ollama modela, proveriti i povući model:
+Ako search/query ne radi zbog Ollama modela:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama list
+kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
 ```
 
-Ako embedding radi sporo, proveriti GPU:
+Ako GPU nije vidljiv:
 
 ```powershell
-nvidia-smi
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml logs -f embedding-service
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+kubectl describe node repo-search | Select-String nvidia.com/gpu
+kubectl -n kube-system logs daemonset/nvidia-device-plugin-daemonset --tail=120
 ```
 
-## 8. Zaustavljanje
+Ako je klaster obrisan komandom `minikube delete --profile repo-search`, baza se pravi iznova. Search tada radi, ali vraća prazne rezultate dok se ponovo ne napravi admin nalog i ne pokrene novi harvest.
 
-Zaustaviti kontejnere bez brisanja podataka:
+## 11. Zaustavljanje
+
+Zaustaviti Minikube klaster bez brisanja podataka:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml down
+minikube stop -p repo-search
 ```
 
-Zaustaviti i obrisati volume podatke:
+Ponovno pokretanje istog klastera:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml down -v
+minikube start -p repo-search
+kubectl config use-context repo-search
+kubectl -n repo-search get pods
 ```
 
-`down -v` koristiti samo kada namerno želiš čisto pokretanje bez prethodnih podataka.
+## 12. Brisanje
+
+Obrisati aplikaciju i lokalne Kubernetes podatke:
+
+```powershell
+kubectl delete namespace repo-search
+```
+
+Obrisati ceo Minikube klaster:
+
+```powershell
+minikube delete --profile repo-search
+```

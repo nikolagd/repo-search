@@ -12,10 +12,12 @@ from microservices.auth_service.auth import (
     set_csrf_cookie,
 )
 from microservices.common.db import get_connection
+from microservices.common.observability import setup_observability
 from microservices.common.schemas import AdminCredentials, AdminUserResponse, AuthResponse, HealthResponse
 from microservices.common.security import require_api_token
 
 app = FastAPI(title="Repo Search Auth Service", version="0.1.0")
+setup_observability(app, "auth-service")
 
 
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])

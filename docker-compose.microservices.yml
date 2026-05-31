@@ -239,6 +239,7 @@ services:
       SEARCH_SERVICE_URL: http://search-service:8000
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
       HARVEST_OUTPUT_DIR: /app/data
+      METRICS_PORT: 9100
     depends_on:
       job-service:
         condition: service_healthy
@@ -285,9 +286,78 @@ services:
       retries: 12
       start_period: 10s
 
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      gateway:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      search-service:
+        condition: service_healthy
+      query-service:
+        condition: service_healthy
+      embedding-service:
+        condition: service_healthy
+      job-service:
+        condition: service_healthy
+    ports:
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    ports:
+      - "${GRAFANA_HOST_PORT:-3000}:3000"
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: ${POSTGRES_EXPORTER_IMAGE:-prometheuscommunity/postgres-exporter:latest}
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${DB_USER:-repo_search}:${DB_PASSWORD:-repo_search_password}@db-primary:5432/${DB_NAME:-repo_search}?sslmode=disable"
+    depends_on:
+      db-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cadvisor:
+    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}
+    profiles: ["container-metrics"]
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "${CADVISOR_HOST_PORT:-8088}:8080"
+    restart: unless-stopped
+
 volumes:
   shared_db_primary_data:
   shared_db_replica_data:
   harvest_xml_data:
   model_cache:
   ollama_microservice_data:
+  prometheus_data:
+  grafana_data:

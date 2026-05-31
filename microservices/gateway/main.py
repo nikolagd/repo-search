@@ -7,11 +7,13 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 from microservices.common.config import service_url
-from microservices.common.http import proxy_request, raise_for_service
+from microservices.common.http import observed_async_request, proxy_request, raise_for_service
+from microservices.common.observability import setup_observability
 from microservices.common.schemas import HealthResponse, StatsResponse
 from microservices.common.security import internal_headers, require_api_token
 
 app = FastAPI(title="Repo Search API Gateway", version="0.1.0")
+setup_observability(app, "gateway")
 
 AUTH_SERVICE_URL = service_url("AUTH_SERVICE_URL", "http://auth-service:8000")
 CATALOG_SERVICE_URL = service_url("CATALOG_SERVICE_URL", "http://catalog-service:8000")
@@ -34,7 +36,14 @@ async def require_admin_request(request: Request) -> None:
         headers["cookie"] = cookie
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(f"{AUTH_SERVICE_URL}/auth/me", headers=headers)
+        response = await observed_async_request(
+            client,
+            "GET",
+            f"{AUTH_SERVICE_URL}/auth/me",
+            service_name="gateway",
+            upstream_service="auth-service",
+            headers=headers,
+        )
         raise_for_service(response, "Auth service")
 
 
@@ -42,10 +51,38 @@ async def require_admin_request(request: Request) -> None:
 async def health() -> HealthResponse:
     async with httpx.AsyncClient(timeout=10) as client:
         responses = await asyncio.gather(
-            client.get(f"{CATALOG_SERVICE_URL}/health", headers=internal_headers()),
-            client.get(f"{SEARCH_SERVICE_URL}/health", headers=internal_headers()),
-            client.get(f"{JOB_SERVICE_URL}/health", headers=internal_headers()),
-            client.get(f"{AUTH_SERVICE_URL}/health", headers=internal_headers()),
+            observed_async_request(
+                client,
+                "GET",
+                f"{CATALOG_SERVICE_URL}/health",
+                service_name="gateway",
+                upstream_service="catalog-service",
+                headers=internal_headers(),
+            ),
+            observed_async_request(
+                client,
+                "GET",
+                f"{SEARCH_SERVICE_URL}/health",
+                service_name="gateway",
+                upstream_service="search-service",
+                headers=internal_headers(),
+            ),
+            observed_async_request(
+                client,
+                "GET",
+                f"{JOB_SERVICE_URL}/health",
+                service_name="gateway",
+                upstream_service="job-service",
+                headers=internal_headers(),
+            ),
+            observed_async_request(
+                client,
+                "GET",
+                f"{AUTH_SERVICE_URL}/health",
+                service_name="gateway",
+                upstream_service="auth-service",
+                headers=internal_headers(),
+            ),
         )
 
     database = "ok" if all(response.status_code < 400 for response in responses) else "unavailable"
@@ -60,9 +97,23 @@ async def repositories(request: Request) -> Response:
 @app.get("/api/stats", response_model=StatsResponse, dependencies=[Depends(require_api_token)])
 async def stats() -> StatsResponse:
     async with httpx.AsyncClient(timeout=30) as client:
-        catalog = await client.get(f"{CATALOG_SERVICE_URL}/stats", headers=internal_headers())
+        catalog = await observed_async_request(
+            client,
+            "GET",
+            f"{CATALOG_SERVICE_URL}/stats",
+            service_name="gateway",
+            upstream_service="catalog-service",
+            headers=internal_headers(),
+        )
         raise_for_service(catalog, "Catalog service")
-        embedding_status = await client.get(f"{SEARCH_SERVICE_URL}/embeddings/status", headers=internal_headers())
+        embedding_status = await observed_async_request(
+            client,
+            "GET",
+            f"{SEARCH_SERVICE_URL}/embeddings/status",
+            service_name="gateway",
+            upstream_service="search-service",
+            headers=internal_headers(),
+        )
         raise_for_service(embedding_status, "Search service")
 
     payload = catalog.json()
@@ -85,10 +136,21 @@ async def admin_repositories(request: Request) -> list[dict]:
     await require_admin_request(request)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        repos_response = await client.get(f"{CATALOG_SERVICE_URL}/repositories", headers=internal_headers())
+        repos_response = await observed_async_request(
+            client,
+            "GET",
+            f"{CATALOG_SERVICE_URL}/repositories",
+            service_name="gateway",
+            upstream_service="catalog-service",
+            headers=internal_headers(),
+        )
         raise_for_service(repos_response, "Catalog service")
-        jobs_response = await client.get(
+        jobs_response = await observed_async_request(
+            client,
+            "GET",
             f"{JOB_SERVICE_URL}/jobs",
+            service_name="gateway",
+            upstream_service="job-service",
             params={"job_type": "repository_harvest"},
             headers=internal_headers(),
         )
@@ -132,8 +194,12 @@ async def admin_harvest_repository(repo_id: int, request: Request) -> dict:
     await require_admin_request(request)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
+        response = await observed_async_request(
+            client,
+            "POST",
             f"{JOB_SERVICE_URL}/jobs/harvest",
+            service_name="gateway",
+            upstream_service="job-service",
             json={"repository_id": repo_id},
             headers=internal_headers(),
         )
@@ -146,12 +212,30 @@ async def admin_embeddings(request: Request) -> dict:
     await require_admin_request(request)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        catalog_response = await client.get(f"{CATALOG_SERVICE_URL}/stats", headers=internal_headers())
+        catalog_response = await observed_async_request(
+            client,
+            "GET",
+            f"{CATALOG_SERVICE_URL}/stats",
+            service_name="gateway",
+            upstream_service="catalog-service",
+            headers=internal_headers(),
+        )
         raise_for_service(catalog_response, "Catalog service")
-        status_response = await client.get(f"{SEARCH_SERVICE_URL}/embeddings/status", headers=internal_headers())
+        status_response = await observed_async_request(
+            client,
+            "GET",
+            f"{SEARCH_SERVICE_URL}/embeddings/status",
+            service_name="gateway",
+            upstream_service="search-service",
+            headers=internal_headers(),
+        )
         raise_for_service(status_response, "Search service")
-        jobs_response = await client.get(
+        jobs_response = await observed_async_request(
+            client,
+            "GET",
             f"{JOB_SERVICE_URL}/jobs",
+            service_name="gateway",
+            upstream_service="job-service",
             params={"job_type": "embedding_backfill"},
             headers=internal_headers(),
         )
@@ -172,8 +256,12 @@ async def admin_embedding_backfill(request: Request) -> dict:
     await require_admin_request(request)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
+        response = await observed_async_request(
+            client,
+            "POST",
             f"{JOB_SERVICE_URL}/jobs/embedding-backfill",
+            service_name="gateway",
+            upstream_service="job-service",
             headers=internal_headers(),
         )
         raise_for_service(response, "Job service")
@@ -185,8 +273,12 @@ async def acknowledge_job(job_id: int, request: Request) -> dict:
     await require_admin_request(request)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
+        response = await observed_async_request(
+            client,
+            "POST",
             f"{JOB_SERVICE_URL}/jobs/{job_id}/acknowledge",
+            service_name="gateway",
+            upstream_service="job-service",
             headers=internal_headers(),
         )
         raise_for_service(response, "Job service")

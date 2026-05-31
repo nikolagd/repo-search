@@ -1,7 +1,7 @@
 import json
 import os
 
-import requests
+from microservices.common.http import observed_sync_request
 
 LLM_URL = os.getenv("LLM_URL", "http://localhost:11434/api/generate")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
@@ -14,8 +14,11 @@ def parse_json_response(text: str) -> dict | None:
 
 
 def call_ollama_json(prompt: str) -> dict | None:
-    response = requests.post(
+    response = observed_sync_request(
+        "POST",
         LLM_URL,
+        service_name="query-service",
+        upstream_service=LLM_PROVIDER,
         json={
             "model": LLM_MODEL,
             "prompt": prompt,
@@ -30,8 +33,11 @@ def call_ollama_json(prompt: str) -> dict | None:
 
 
 def call_openai_compatible_json(prompt: str) -> dict | None:
-    response = requests.post(
+    response = observed_sync_request(
+        "POST",
         LLM_URL,
+        service_name="query-service",
+        upstream_service=LLM_PROVIDER,
         json={
             "model": LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],

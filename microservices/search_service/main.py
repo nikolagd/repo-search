@@ -10,12 +10,14 @@ from pydantic import BaseModel, Field
 
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
-from microservices.common.http import raise_for_service
+from microservices.common.http import observed_async_request, raise_for_service
+from microservices.common.observability import observe_search_request, setup_observability
 from microservices.common.schemas import HealthResponse, SearchRequest
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
 
 app = FastAPI(title="Repo Search Search Service", version="0.1.0")
+setup_observability(app, "search-service")
 
 QUERY_SERVICE_URL = service_url("QUERY_SERVICE_URL", "http://query-service:8000")
 EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-service:8000")
@@ -114,8 +116,12 @@ def health() -> HealthResponse:
 async def parse_search_query(query: str) -> dict:
     async with httpx.AsyncClient(timeout=90) as client:
         try:
-            response = await client.post(
+            response = await observed_async_request(
+                client,
+                "POST",
                 f"{QUERY_SERVICE_URL}/query/parse",
+                service_name="search-service",
+                upstream_service="query-service",
                 json={"query": query},
                 headers=internal_headers(),
             )
@@ -127,8 +133,12 @@ async def parse_search_query(query: str) -> dict:
 
 async def embed_query(query: str) -> list[float]:
     async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
+        response = await observed_async_request(
+            client,
+            "POST",
             f"{EMBEDDING_SERVICE_URL}/embed/query",
+            service_name="search-service",
+            upstream_service="embedding-service",
             json={"query": query},
             headers=internal_headers(),
         )
@@ -201,83 +211,84 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
 
 @app.post("/search", dependencies=[Depends(require_api_token)])
 async def search(request: SearchRequest) -> dict[str, Any]:
-    query = request.query.strip()
-    parsed = await parse_search_query(query)
-    embedding_queries = [item for item in parsed["embedding_queries"] if item.strip()]
-    candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
-    merged: dict[int, dict[str, Any]] = {}
+    with observe_search_request("search-service"):
+        query = request.query.strip()
+        parsed = await parse_search_query(query)
+        embedding_queries = [item for item in parsed["embedding_queries"] if item.strip()]
+        candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
+        merged: dict[int, dict[str, Any]] = {}
 
-    for embedding_query in embedding_queries:
-        query_vector = await embed_query(embedding_query)
-        rows = fetch_vector_results(query_vector, candidate_limit, parsed["year_from"], parsed["year_to"])
+        for embedding_query in embedding_queries:
+            query_vector = await embed_query(embedding_query)
+            rows = fetch_vector_results(query_vector, candidate_limit, parsed["year_from"], parsed["year_to"])
 
-        for rank, row in enumerate(rows, start=1):
-            publication_id = row[0]
-            cosine_distance = float(row[5])
-            cosine_similarity = 1 - cosine_distance
-            existing = merged.get(publication_id)
+            for rank, row in enumerate(rows, start=1):
+                publication_id = row[0]
+                cosine_distance = float(row[5])
+                cosine_similarity = 1 - cosine_distance
+                existing = merged.get(publication_id)
 
-            if existing is None:
-                merged[publication_id] = {
-                    "id": row[0],
-                    "title": row[1],
-                    "abstract": row[2],
-                    "source_url": row[3],
-                    "date": row[4],
-                    "cosine_distance": cosine_distance,
-                    "cosine_similarity": cosine_similarity,
-                    "repository": row[6],
-                    "authors": list(row[7] or []),
-                    "matched_query": embedding_query,
-                    "matched_queries": {embedding_query},
-                    "best_rank": rank,
-                }
-                continue
+                if existing is None:
+                    merged[publication_id] = {
+                        "id": row[0],
+                        "title": row[1],
+                        "abstract": row[2],
+                        "source_url": row[3],
+                        "date": row[4],
+                        "cosine_distance": cosine_distance,
+                        "cosine_similarity": cosine_similarity,
+                        "repository": row[6],
+                        "authors": list(row[7] or []),
+                        "matched_query": embedding_query,
+                        "matched_queries": {embedding_query},
+                        "best_rank": rank,
+                    }
+                    continue
 
-            existing["matched_queries"].add(embedding_query)
-            if cosine_similarity > existing["cosine_similarity"]:
-                existing["cosine_distance"] = cosine_distance
-                existing["cosine_similarity"] = cosine_similarity
-                existing["matched_query"] = embedding_query
-                existing["best_rank"] = rank
+                existing["matched_queries"].add(embedding_query)
+                if cosine_similarity > existing["cosine_similarity"]:
+                    existing["cosine_distance"] = cosine_distance
+                    existing["cosine_similarity"] = cosine_similarity
+                    existing["matched_query"] = embedding_query
+                    existing["best_rank"] = rank
 
-    results = []
-    for result in merged.values():
-        topic_boost = phrase_boost(
-            result["title"],
-            result["abstract"],
-            parsed.get("topic_phrases", []),
-            TOPIC_TITLE_BOOST,
-            TOPIC_ABSTRACT_BOOST,
-        )
-        ranking_boost = phrase_boost(
-            result["title"],
-            result["abstract"],
-            parsed.get("ranking_phrases", []),
-            RANKING_PHRASE_BOOST,
-            RANKING_PHRASE_BOOST,
-        )
-        coverage_boost = min(len(result["matched_queries"]) * QUERY_COVERAGE_BOOST, 0.015)
-        result["topic_boost"] = round(topic_boost, 6)
-        result["ranking_boost"] = round(ranking_boost, 6)
-        result["coverage_boost"] = round(coverage_boost, 6)
-        result["score"] = round(result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost, 6)
-        result["cosine_distance"] = round(result["cosine_distance"], 6)
-        result["cosine_similarity"] = round(result["cosine_similarity"], 6)
-        result["date"] = serialize_datetime(result["date"])
-        result["matched_queries"] = sorted(result["matched_queries"])
-        results.append(result)
+        results = []
+        for result in merged.values():
+            topic_boost = phrase_boost(
+                result["title"],
+                result["abstract"],
+                parsed.get("topic_phrases", []),
+                TOPIC_TITLE_BOOST,
+                TOPIC_ABSTRACT_BOOST,
+            )
+            ranking_boost = phrase_boost(
+                result["title"],
+                result["abstract"],
+                parsed.get("ranking_phrases", []),
+                RANKING_PHRASE_BOOST,
+                RANKING_PHRASE_BOOST,
+            )
+            coverage_boost = min(len(result["matched_queries"]) * QUERY_COVERAGE_BOOST, 0.015)
+            result["topic_boost"] = round(topic_boost, 6)
+            result["ranking_boost"] = round(ranking_boost, 6)
+            result["coverage_boost"] = round(coverage_boost, 6)
+            result["score"] = round(result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost, 6)
+            result["cosine_distance"] = round(result["cosine_distance"], 6)
+            result["cosine_similarity"] = round(result["cosine_similarity"], 6)
+            result["date"] = serialize_datetime(result["date"])
+            result["matched_queries"] = sorted(result["matched_queries"])
+            results.append(result)
 
-    results.sort(key=lambda item: item["score"], reverse=True)
-    results = results[:request.limit]
+        results.sort(key=lambda item: item["score"], reverse=True)
+        results = results[:request.limit]
 
-    return {
-        "query": query,
-        "limit": request.limit,
-        "plan": parsed,
-        "results": results,
-        "total": len(results),
-    }
+        return {
+            "query": query,
+            "limit": request.limit,
+            "plan": parsed,
+            "results": results,
+            "total": len(results),
+        }
 
 
 @app.get("/embeddings/status", dependencies=[Depends(require_api_token)])

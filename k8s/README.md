@@ -140,6 +140,12 @@ kubectl -n repo-search rollout status deployment/gateway --timeout=300s
 kubectl -n repo-search rollout status deployment/frontend --timeout=300s
 kubectl -n repo-search rollout status deployment/ollama --timeout=300s
 kubectl -n repo-search rollout status deployment/job-worker --timeout=300s
+kubectl -n repo-search rollout status deployment/prometheus --timeout=180s
+kubectl -n repo-search rollout status deployment/grafana --timeout=180s
+kubectl -n repo-search rollout status deployment/postgres-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/kube-state-metrics --timeout=180s
+kubectl -n repo-search rollout status daemonset/node-exporter --timeout=180s
+kubectl -n repo-search rollout status daemonset/dcgm-exporter --timeout=180s
 ```
 
 Proveriti podove:
@@ -226,7 +232,68 @@ Provera GPU-a u embedding podu:
 kubectl -n repo-search exec deployment/embedding-service -- python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
 
-## 8. Osnovni troubleshooting
+## 8. Observability i metrics-server
+
+`metrics-server` je potreban za Kubernetes CPU/memory metrike, `kubectl top` i kasnije HPA pravila.
+On ne skuplja aplikacione metrike kao sto su request latency, error rate, route throughput ili
+service-to-service latency. Za to se koristi Prometheus scrape `/metrics` endpoint-a i Grafana.
+
+U Minikube-u ukljuciti metrics-server:
+
+```powershell
+minikube addons enable metrics-server -p repo-search
+kubectl top pods -n repo-search
+kubectl top nodes
+```
+
+Ako `kubectl top` ne vraca podatke odmah, sacekati da se metrics-server rollout zavrsi:
+
+```powershell
+kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
+kubectl get apiservice v1beta1.metrics.k8s.io
+```
+
+Aplikacioni `/metrics` endpoint-i postoje na backend servisima:
+
+```text
+http://gateway:8000/metrics
+http://auth-service:8000/metrics
+http://catalog-service:8000/metrics
+http://search-service:8000/metrics
+http://query-service:8000/metrics
+http://embedding-service:8000/metrics
+http://job-service:8000/metrics
+```
+
+Sledeci korak za Kubernetes observability je in-cluster Prometheus deployment ili Prometheus Operator
+sa `ServiceMonitor` resursima. `metrics-server` ostaje za resource usage i autoscaling, a Prometheus
+ostaje izvor za Grafana dashboard-e.
+
+Prometheus, Grafana, Postgres exporter, kube-state-metrics i node-exporter su deo `k8s/05-observability.yaml` i primenjuju se kroz:
+
+```powershell
+kubectl apply -k k8s/
+```
+
+GPU overlay `k8s-gpu/` dodaje DCGM exporter za NVIDIA GPU metrike:
+
+```powershell
+kubectl apply -k k8s-gpu/
+```
+
+Otvaranje Prometheus-a:
+
+```powershell
+kubectl -n repo-search port-forward service/prometheus 9090:9090
+```
+
+Otvaranje Grafana-e:
+
+```powershell
+kubectl -n repo-search port-forward service/grafana 3000:3000
+```
+
+## 9. Osnovni troubleshooting
 
 Ako podovi nisu spremni:
 
@@ -292,7 +359,7 @@ kubectl -n repo-search rollout restart deployment/catalog-service
 kubectl -n repo-search rollout restart deployment/job-worker
 ```
 
-## 9. Zaustavljanje
+## 10. Zaustavljanje
 
 Zaustaviti Minikube klaster bez brisanja podataka:
 
@@ -311,9 +378,9 @@ kubectl config use-context repo-search
 kubectl -n repo-search get pods
 ```
 
-Ako koristiš Docker Compose umesto Kubernetes-a, zaustavljanje je u glavnom README fajlu.
+Ako koristiš Docker Compose umesto Kubernetes-a, arhivirano uputstvo je u `docs/docker-compose-microservices.md`.
 
-## 10. Brisanje
+## 11. Brisanje
 
 Obrisati aplikaciju i lokalne Kubernetes podatke:
 
