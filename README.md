@@ -1,5 +1,3 @@
-# Repo Search
-
 Primarni način pokretanja aplikacije je Kubernetes preko lokalnog Minikube klastera.
 
 Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](docs/docker-compose-microservices.md) i treba ga koristiti samo za lokalni smoke test, debugging van Kubernetes-a ili poređenje sa manifestima.
