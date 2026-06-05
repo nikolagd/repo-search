@@ -31,19 +31,29 @@ def health() -> HealthResponse:
 
 @app.post("/embed/query", dependencies=[Depends(require_api_token)])
 def embed_query(request: QueryEmbeddingRequest) -> dict[str, list[float]]:
-    with observe_embedding("embedding-service", "query"):
+    with observe_embedding("embedding-service", "query") as span:
+        query = request.query.strip()
+        if span is not None:
+            span.set_attribute("repo_search.query_length", len(query))
         vector = model.encode(
-            f"query: {request.query.strip()}",
+            f"query: {query}",
             normalize_embeddings=True,
         ).tolist()
+        if span is not None:
+            span.set_attribute("repo_search.embedding_dimension", len(vector))
     return {"embedding": vector}
 
 
 @app.post("/embed/document", dependencies=[Depends(require_api_token)])
 def embed_document(request: DocumentEmbeddingRequest) -> dict[str, list[float]]:
-    with observe_embedding("embedding-service", "document"):
+    with observe_embedding("embedding-service", "document") as span:
+        document_text = build_document_text(request.title, request.abstract)
+        if span is not None:
+            span.set_attribute("repo_search.document_text_length", len(document_text))
         vector = model.encode(
-            build_document_text(request.title, request.abstract),
+            document_text,
             normalize_embeddings=True,
         ).tolist()
+        if span is not None:
+            span.set_attribute("repo_search.embedding_dimension", len(vector))
     return {"embedding": vector}

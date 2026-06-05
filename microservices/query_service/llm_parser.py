@@ -2,6 +2,7 @@ import json
 import os
 
 from microservices.common.http import observed_sync_request
+from microservices.common.observability import trace_span
 
 LLM_URL = os.getenv("LLM_URL", "http://localhost:11434/api/generate")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
@@ -14,40 +15,56 @@ def parse_json_response(text: str) -> dict | None:
 
 
 def call_ollama_json(prompt: str) -> dict | None:
-    response = observed_sync_request(
-        "POST",
-        LLM_URL,
-        service_name="query-service",
-        upstream_service=LLM_PROVIDER,
-        json={
-            "model": LLM_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": 0},
+    with trace_span(
+        "llm.call",
+        {
+            "repo_search.llm.provider": LLM_PROVIDER,
+            "repo_search.llm.model": LLM_MODEL,
+            "repo_search.prompt_length": len(prompt),
         },
-        timeout=LLM_TIMEOUT,
-    )
-    response.raise_for_status()
-    return parse_json_response(response.json().get("response", ""))
+    ):
+        response = observed_sync_request(
+            "POST",
+            LLM_URL,
+            service_name="query-service",
+            upstream_service=LLM_PROVIDER,
+            json={
+                "model": LLM_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0},
+            },
+            timeout=LLM_TIMEOUT,
+        )
+        response.raise_for_status()
+        return parse_json_response(response.json().get("response", ""))
 
 
 def call_openai_compatible_json(prompt: str) -> dict | None:
-    response = observed_sync_request(
-        "POST",
-        LLM_URL,
-        service_name="query-service",
-        upstream_service=LLM_PROVIDER,
-        json={
-            "model": LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
+    with trace_span(
+        "llm.call",
+        {
+            "repo_search.llm.provider": LLM_PROVIDER,
+            "repo_search.llm.model": LLM_MODEL,
+            "repo_search.prompt_length": len(prompt),
         },
-        timeout=LLM_TIMEOUT,
-    )
-    response.raise_for_status()
-    return parse_json_response(response.json()["choices"][0]["message"]["content"])
+    ):
+        response = observed_sync_request(
+            "POST",
+            LLM_URL,
+            service_name="query-service",
+            upstream_service=LLM_PROVIDER,
+            json={
+                "model": LLM_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=LLM_TIMEOUT,
+        )
+        response.raise_for_status()
+        return parse_json_response(response.json()["choices"][0]["message"]["content"])
 
 
 def call_llm_json(prompt: str) -> dict | None:
@@ -91,11 +108,17 @@ Rules:
 User query:
 {query}
 """
-    try:
-        return call_llm_json(prompt)
-    except Exception as exc:
-        print("LLM parser failed:", exc)
-        return None
+    with trace_span("llm.parse_query", {"repo_search.query_length": len(query)}) as span:
+        try:
+            plan = call_llm_json(prompt)
+            if span is not None:
+                span.set_attribute("repo_search.llm.returned_plan", plan is not None)
+            return plan
+        except Exception as exc:
+            if span is not None:
+                span.set_attribute("repo_search.llm.failed", True)
+            print("LLM parser failed:", exc)
+            return None
 
 
 def repair_query_plan(query: str, bad_plan: dict, reason: str) -> dict | None:
@@ -122,8 +145,20 @@ User query:
 Bad plan:
 {json.dumps(bad_plan, ensure_ascii=False)}
 """
-    try:
-        return call_llm_json(prompt)
-    except Exception as exc:
-        print("LLM repair failed:", exc)
-        return None
+    with trace_span(
+        "llm.repair_query_plan",
+        {
+            "repo_search.query_length": len(query),
+            "repo_search.repair_reason": reason,
+        },
+    ) as span:
+        try:
+            plan = call_llm_json(prompt)
+            if span is not None:
+                span.set_attribute("repo_search.llm.returned_plan", plan is not None)
+            return plan
+        except Exception as exc:
+            if span is not None:
+                span.set_attribute("repo_search.llm.failed", True)
+            print("LLM repair failed:", exc)
+            return None

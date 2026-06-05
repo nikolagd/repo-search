@@ -145,6 +145,8 @@ kubectl -n repo-search rollout status deployment/grafana --timeout=180s
 kubectl -n repo-search rollout status deployment/postgres-exporter --timeout=180s
 kubectl -n repo-search rollout status deployment/kube-state-metrics --timeout=180s
 kubectl -n repo-search rollout status daemonset/node-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/otel-collector --timeout=180s
+kubectl -n repo-search rollout status deployment/jaeger --timeout=180s
 kubectl -n repo-search rollout status daemonset/dcgm-exporter --timeout=180s
 ```
 
@@ -265,10 +267,6 @@ http://embedding-service:8000/metrics
 http://job-service:8000/metrics
 ```
 
-Sledeci korak za Kubernetes observability je in-cluster Prometheus deployment ili Prometheus Operator
-sa `ServiceMonitor` resursima. `metrics-server` ostaje za resource usage i autoscaling, a Prometheus
-ostaje izvor za Grafana dashboard-e.
-
 Prometheus, Grafana, Postgres exporter, kube-state-metrics i node-exporter su deo `k8s/05-observability.yaml` i primenjuju se kroz:
 
 ```powershell
@@ -292,6 +290,22 @@ Otvaranje Grafana-e:
 ```powershell
 kubectl -n repo-search port-forward service/grafana 3000:3000
 ```
+
+OpenTelemetry Collector i Jaeger su deo `k8s/06-tracing.yaml`. OpenTelemetry šalje trace podatke iz Python servisa ka collector-u, a collector ih prosleđuje u Jaeger.
+
+Otvaranje Jaeger UI-a:
+
+```powershell
+kubectl -n repo-search port-forward service/jaeger 16686:16686
+```
+
+Zatim otvoriti:
+
+```text
+http://localhost:16686
+```
+
+U Jaeger-u se vidi jedan konkretan request ili job kroz servise, na primer `gateway -> search-service -> query-service -> embedding-service`.
 
 ## 9. Osnovni troubleshooting
 

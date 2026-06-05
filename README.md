@@ -86,6 +86,7 @@ kubectl top nodes
 ```
 
 Prometheus, Grafana, kube-state-metrics, node-exporter i Postgres exporter su deo Kubernetes manifesta u `k8s/05-observability.yaml`.
+OpenTelemetry Collector i Jaeger su deo `k8s/06-tracing.yaml`.
 GPU overlay `k8s-gpu/` dodaje DCGM exporter za NVIDIA GPU metrike.
 
 ## 4. Build image-a unutar Minikube-a
@@ -151,6 +152,8 @@ kubectl -n repo-search rollout status deployment/grafana --timeout=180s
 kubectl -n repo-search rollout status deployment/postgres-exporter --timeout=180s
 kubectl -n repo-search rollout status deployment/kube-state-metrics --timeout=180s
 kubectl -n repo-search rollout status daemonset/node-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/otel-collector --timeout=180s
+kubectl -n repo-search rollout status deployment/jaeger --timeout=180s
 kubectl -n repo-search rollout status daemonset/dcgm-exporter --timeout=180s
 ```
 
@@ -221,7 +224,19 @@ curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost
 ## 8. Observability
 
 Prometheus, Grafana, Postgres exporter, kube-state-metrics i node-exporter se deploy-uju kroz `k8s/05-observability.yaml`.
+OpenTelemetry Collector i Jaeger se deploy-uju kroz `k8s/06-tracing.yaml`.
 GPU deploy kroz `k8s-gpu/` dodaje i DCGM exporter.
+
+Port-forward procesi se ne čuvaju posle restartovanja terminala, Docker Desktop-a ili Minikube klastera. Posle novog pokretanja klastera treba ih ponovo startovati. Najpraktičnije je otvoriti poseban PowerShell prozor za svaki od ovih procesa:
+
+```powershell
+kubectl -n repo-search port-forward service/gateway 8090:8000
+kubectl -n repo-search port-forward service/prometheus 9090:9090
+kubectl -n repo-search port-forward service/grafana 3000:3000
+kubectl -n repo-search port-forward service/jaeger 16686:16686
+```
+
+Dok je komanda aktivna, odgovarajući lokalni URL radi. Kada se prozor zatvori ili se proces prekine sa `Ctrl+C`, port-forward više nije aktivan.
 
 Otvaranje Prometheus-a:
 
@@ -259,6 +274,21 @@ Proveriti Prometheus targets:
 http://localhost:9090/targets
 ```
 
+Otvaranje Jaeger UI-a za distributed tracing:
+
+```powershell
+kubectl -n repo-search port-forward service/jaeger 16686:16686
+```
+
+Zatim otvoriti:
+
+```text
+http://localhost:16686
+```
+
+U Jaeger-u se mogu birati servisi kao `gateway`, `search-service`, `query-service`, `embedding-service` i `job-worker`.
+Prometheus/Grafana prikazuju agregirane metrike kroz vreme, dok Jaeger prikazuje putanju jednog konkretnog request-a ili job-a kroz mikroservise.
+
 Detalji su u [docs/observability.md](docs/observability.md).
 
 ## 9. Korisne komande
@@ -284,6 +314,8 @@ kubectl -n repo-search logs deployment/embedding-service -f
 kubectl -n repo-search logs deployment/job-worker -f
 kubectl -n repo-search logs deployment/prometheus -f
 kubectl -n repo-search logs deployment/grafana -f
+kubectl -n repo-search logs deployment/otel-collector -f
+kubectl -n repo-search logs deployment/jaeger -f
 ```
 
 Provera GPU-a u embedding podu:
@@ -320,6 +352,58 @@ Ako frontend URL sa Minikube IP adresom ne radi na Windows-u:
 ```powershell
 minikube service frontend -n repo-search -p repo-search
 ```
+
+Ako `kubectl port-forward` vrati grešku kao:
+
+```text
+Unable to connect to the server: dial tcp 127.0.0.1:<port>: connectex: No connection could be made because the target machine actively refused it.
+```
+
+problem nije u servisu koji se forward-uje, već u tome što `kubectl` ne može da dođe do Minikube API servera. To se često desi posle restartovanja Docker Desktop-a, kada Minikube profil ostane upisan u kubeconfig-u sa starim lokalnim portom.
+
+Proveriti stanje:
+
+```powershell
+minikube status -p repo-search
+kubectl config current-context
+```
+
+Ako status kaže `apiserver: Stopped`, `kubelet: Stopped` ili `kubeconfig: Misconfigured`, pokrenuti:
+
+```powershell
+minikube start -p repo-search
+kubectl config use-context repo-search
+kubectl -n repo-search get pods
+```
+
+Ako Minikube posebno prijavi stale context, može se ručno osvežiti:
+
+```powershell
+minikube update-context -p repo-search
+```
+
+Sačekati da podovi pređu u `1/1 Running`, pa ponovo pokrenuti port-forward komande iz sekcije Observability.
+
+Ako posle restartovanja Docker Desktop-a ili `minikube start` podovi prvo izgledaju kao da su puni grešaka, ne restartovati odmah sve ponovo. Često je u pitanju normalan redosled oporavka:
+
+```text
+embedding-service -> search-service -> gateway
+```
+
+`embedding-service` mora prvo da dobije GPU, učita model i prođe readiness proveru. Dok se to ne desi, `search-service` može ostati u `Init` stanju jer čeka `embedding-service`, a `gateway` može biti `0/1` jer njegov health check poziva downstream servise. Proveriti stanje nekoliko puta u razmaku od 30-60 sekundi:
+
+```powershell
+kubectl -n repo-search get pods
+kubectl -n repo-search get endpoints embedding-service search-service gateway
+```
+
+Ako je novi pod istog deployment-a zdrav, a stari pod i dalje stoji u `Error` ili `UnexpectedAdmissionError`, taj stari pod se može obrisati:
+
+```powershell
+kubectl -n repo-search delete pod <stari-pod>
+```
+
+Primer: ako postoji novi `embedding-service` pod koji je `1/1 Running`, a stari `embedding-service` pod je ostao u `UnexpectedAdmissionError`, obrisati samo stari pod. Ne raditi novi `rollout restart` dok se ne proveri da li se aktivni podovi već sami oporavljaju.
 
 Ako search/query ne radi zbog Ollama modela:
 

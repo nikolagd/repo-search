@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any, Iterator
 
 from fastapi import FastAPI, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest, start_http_server
+
+_TRACING_READY = False
+_FASTAPI_INSTRUMENTED_APPS: set[int] = set()
 
 HTTP_REQUESTS_TOTAL = Counter(
     "repo_search_http_requests_total",
@@ -86,8 +90,56 @@ JOB_OLDEST_RUNNING_AGE_SECONDS = Gauge(
 )
 
 
+def _env_enabled(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _setup_tracing(service_name: str, app: FastAPI | None = None) -> None:
+    if not _env_enabled("OTEL_TRACING_ENABLED"):
+        return
+
+    global _TRACING_READY
+
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+        from opentelemetry.instrumentation.requests import RequestsInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except Exception as exc:
+        print(f"OpenTelemetry tracing is enabled but could not be initialized: {exc}", file=sys.stderr, flush=True)
+        return
+
+    if not _TRACING_READY:
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.namespace": os.getenv("OTEL_SERVICE_NAMESPACE", "repo-search"),
+                "deployment.environment": os.getenv("OTEL_DEPLOYMENT_ENVIRONMENT", "local"),
+            }
+        )
+        provider = TracerProvider(resource=resource)
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True)))
+        trace.set_tracer_provider(provider)
+
+        HTTPXClientInstrumentor().instrument()
+        RequestsInstrumentor().instrument()
+        Psycopg2Instrumentor().instrument()
+        _TRACING_READY = True
+
+    if app is not None and id(app) not in _FASTAPI_INSTRUMENTED_APPS:
+        FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics")
+        _FASTAPI_INSTRUMENTED_APPS.add(id(app))
+
+
 def setup_observability(app: FastAPI, service_name: str) -> None:
     app.state.service_name = service_name
+    _setup_tracing(service_name, app)
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next) -> Response:
@@ -139,21 +191,40 @@ def record_outbound_http_request(
 
 
 @contextmanager
-def observe_search_request(service_name: str) -> Iterator[None]:
-    with SEARCH_REQUEST_DURATION_SECONDS.labels(service_name).time():
-        yield
+def trace_span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
+    if not _TRACING_READY:
+        yield None
+        return
+
+    from opentelemetry import trace
+
+    with trace.get_tracer("repo-search").start_as_current_span(name) as span:
+        if attributes:
+            for key, value in attributes.items():
+                if value is not None:
+                    span.set_attribute(key, value)
+        yield span
 
 
 @contextmanager
-def observe_query_parse(service_name: str, parser: str) -> Iterator[None]:
-    with QUERY_PARSE_DURATION_SECONDS.labels(service_name, parser).time():
-        yield
+def observe_search_request(service_name: str) -> Iterator[Any]:
+    with trace_span("search.request", {"repo_search.service": service_name}) as span:
+        with SEARCH_REQUEST_DURATION_SECONDS.labels(service_name).time():
+            yield span
 
 
 @contextmanager
-def observe_embedding(service_name: str, kind: str) -> Iterator[None]:
-    with EMBEDDING_DURATION_SECONDS.labels(service_name, kind).time():
-        yield
+def observe_query_parse(service_name: str, parser: str) -> Iterator[Any]:
+    with trace_span("query.parse", {"repo_search.service": service_name, "repo_search.parser": parser}) as span:
+        with QUERY_PARSE_DURATION_SECONDS.labels(service_name, parser).time():
+            yield span
+
+
+@contextmanager
+def observe_embedding(service_name: str, kind: str) -> Iterator[Any]:
+    with trace_span("embedding.generate", {"repo_search.service": service_name, "repo_search.embedding.kind": kind}) as span:
+        with EMBEDDING_DURATION_SECONDS.labels(service_name, kind).time():
+            yield span
 
 
 @contextmanager
@@ -161,7 +232,8 @@ def observe_job(service_name: str, job_type: str) -> Iterator[None]:
     start = time.perf_counter()
     status = "failed"
     try:
-        yield
+        with trace_span("job.execute", {"repo_search.service": service_name, "repo_search.job.type": job_type}):
+            yield
         status = "succeeded"
     finally:
         duration = time.perf_counter() - start
@@ -194,6 +266,7 @@ def set_job_oldest_running_age(service_name: str, job_type: str, age_seconds: fl
 
 
 def start_worker_observability(service_name: str) -> None:
+    _setup_tracing(service_name)
     port = int(os.getenv("METRICS_PORT", "9100"))
     start_http_server(port)
     record_job_event(service_name, "worker", "started")

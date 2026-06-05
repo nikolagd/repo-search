@@ -12,6 +12,8 @@ Ovaj sloj počinje metrikama performansi mikroservisa i lokalnim Grafana stack-o
 - kube-state-metrics za stanje Kubernetes objekata: podovi, deployment-i, restarti i replike.
 - node-exporter za CPU i memoriju Kubernetes node-a.
 - DCGM exporter u `k8s-gpu` overlay-u za NVIDIA GPU iskorišćenost i memoriju.
+- OpenTelemetry Collector za prijem trace podataka iz mikroservisa.
+- Jaeger za pregled distributed tracing-a kroz jedan konkretan request ili job.
 - cAdvisor za kontejnerske resource metrike u Docker Compose-u.
 
 ## Pokretanje preko Docker Compose-a
@@ -79,8 +81,16 @@ histogram_quantile(0.95, sum by (le, service, upstream_service) (rate(repo_searc
 sum by (service, status_code) (rate(repo_search_http_requests_total{status_code=~"5.."}[5m]))
 ```
 
+Aktivni poslovi u redu ili obradi:
+
 ```promql
-repo_search_jobs_by_status{service="job-service"}
+repo_search_jobs_by_status{service="job-service",status=~"queued|running"}
+```
+
+Nedavni job događaji, za proveru šta se desilo u poslednjem satu:
+
+```promql
+sum by (job_type, status) (increase(repo_search_job_events_total{service="job-worker",job_type!="worker"}[1h]))
 ```
 
 ```promql
@@ -90,6 +100,47 @@ sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="repo-
 ```promql
 avg by (gpu, UUID) (DCGM_FI_DEV_GPU_UTIL)
 ```
+
+## Distributed tracing
+
+Prometheus i Grafana pokazuju agregirane metrike kroz vreme: koliko ima request-a, kolika je p95 latencija, koliko ima grešaka i koliko su opterećeni podovi, baza i GPU.
+
+OpenTelemetry i Jaeger dodaju drugi pogled: putanju jednog konkretnog request-a ili jednog konkretnog background job-a kroz mikroservise. To je korisno kada treba objasniti gde se potrošilo vreme u jednom pozivu.
+
+Primer trace-a za pretragu:
+
+```text
+gateway
+  search-service
+    query-service /query/parse
+      llm.parse_query
+      llm.call
+    embedding-service /embed/query
+      embedding.generate
+    search.vector_db
+```
+
+Primer trace-a za harvest ili embedding backfill:
+
+```text
+job-worker
+  job.run
+    job.harvest_repository ili job.backfill_embeddings
+      catalog-service
+      embedding-service
+      search-service
+```
+
+Tracing je uključen u Kubernetes-u kroz `repo-search-config`:
+
+```yaml
+OTEL_TRACING_ENABLED: "true"
+OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+OTEL_SERVICE_NAMESPACE: repo-search
+OTEL_DEPLOYMENT_ENVIRONMENT: local-kubernetes
+```
+
+Python servisi inicijalizuju tracing u `microservices/common/observability.py`. Isti modul uključuje FastAPI instrumentation, HTTPX/Requests instrumentation, psycopg2 instrumentation i ručno dodate span-ove za search, query parse, embedding i job tokove.
 
 ## Kubernetes metrics-server
 
@@ -141,6 +192,8 @@ Sačekati rollout:
 kubectl -n repo-search rollout status deployment/prometheus --timeout=180s
 kubectl -n repo-search rollout status deployment/grafana --timeout=180s
 kubectl -n repo-search rollout status deployment/postgres-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/otel-collector --timeout=180s
+kubectl -n repo-search rollout status deployment/jaeger --timeout=180s
 ```
 
 Otvoriti Prometheus:
@@ -178,3 +231,17 @@ Proveriti Prometheus targets:
 ```text
 http://localhost:9090/targets
 ```
+
+Otvoriti Jaeger:
+
+```powershell
+kubectl -n repo-search port-forward service/jaeger 16686:16686
+```
+
+Zatim otvoriti:
+
+```text
+http://localhost:16686
+```
+
+U Jaeger UI-u izabrati servis, na primer `gateway`, `search-service`, `query-service`, `embedding-service` ili `job-worker`, pokrenuti pretragu ili job u aplikaciji i zatim kliknuti `Find Traces`.

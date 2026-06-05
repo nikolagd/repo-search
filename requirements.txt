@@ -25,6 +25,13 @@ packaging==26.0
 pillow==12.1.1
 psycopg2-binary==2.9.11
 prometheus-client==0.22.1
+opentelemetry-api==1.38.0
+opentelemetry-sdk==1.38.0
+opentelemetry-exporter-otlp-proto-grpc==1.38.0
+opentelemetry-instrumentation-fastapi==0.59b0
+opentelemetry-instrumentation-httpx==0.59b0
+opentelemetry-instrumentation-psycopg2==0.59b0
+opentelemetry-instrumentation-requests==0.59b0
 Pygments==2.20.0
 PyJWT==2.12.1
 python-dotenv==1.2.2

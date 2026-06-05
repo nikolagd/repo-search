@@ -21,5 +21,11 @@ def health() -> HealthResponse:
 
 @app.post("/query/parse", dependencies=[Depends(require_api_token)])
 def parse(request: QueryParseRequest) -> dict:
-    with observe_query_parse("query-service", "configured"):
-        return parse_query(request.query)
+    with observe_query_parse("query-service", "configured") as span:
+        if span is not None:
+            span.set_attribute("repo_search.query_length", len(request.query))
+        plan = parse_query(request.query)
+        if span is not None:
+            span.set_attribute("repo_search.embedding_query_count", len(plan.get("embedding_queries", [])))
+            span.set_attribute("repo_search.used_fallback", bool(plan.get("used_fallback")))
+        return plan

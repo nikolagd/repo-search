@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
 from microservices.common.http import observed_async_request, raise_for_service
-from microservices.common.observability import observe_search_request, setup_observability
+from microservices.common.observability import observe_search_request, setup_observability, trace_span
 from microservices.common.schemas import HealthResponse, SearchRequest
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
@@ -200,21 +200,38 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
     """
     params.append(limit)
 
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
-    finally:
-        conn.close()
+    with trace_span(
+        "search.vector_db",
+        {
+            "repo_search.candidate_limit": limit,
+            "repo_search.year_from": year_from,
+            "repo_search.year_to": year_to,
+        },
+    ) as span:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                if span is not None:
+                    span.set_attribute("repo_search.result_candidates", len(rows))
+                return rows
+        finally:
+            conn.close()
 
 
 @app.post("/search", dependencies=[Depends(require_api_token)])
 async def search(request: SearchRequest) -> dict[str, Any]:
-    with observe_search_request("search-service"):
+    with observe_search_request("search-service") as span:
         query = request.query.strip()
+        if span is not None:
+            span.set_attribute("repo_search.query_length", len(query))
+            span.set_attribute("repo_search.limit", request.limit)
         parsed = await parse_search_query(query)
         embedding_queries = [item for item in parsed["embedding_queries"] if item.strip()]
+        if span is not None:
+            span.set_attribute("repo_search.embedding_query_count", len(embedding_queries))
+            span.set_attribute("repo_search.used_fallback", bool(parsed.get("used_fallback")))
         candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
         merged: dict[int, dict[str, Any]] = {}
 
@@ -281,6 +298,10 @@ async def search(request: SearchRequest) -> dict[str, Any]:
 
         results.sort(key=lambda item: item["score"], reverse=True)
         results = results[:request.limit]
+        if span is not None:
+            span.set_attribute("repo_search.result_count", len(results))
+            if results:
+                span.set_attribute("repo_search.top_score", results[0]["score"])
 
         return {
             "query": query,

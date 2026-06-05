@@ -315,12 +315,12 @@ data:
           },
           "targets": [
             {
-              "expr": "repo_search_jobs_by_status{service=\"job-service\"}",
+              "expr": "repo_search_jobs_by_status{service=\"job-service\",status=~\"queued|running\"}",
               "legendFormat": "{{job_type}} {{status}}",
               "refId": "A"
             }
           ],
-          "title": "Jobs By Status",
+          "title": "Current Active Jobs",
           "type": "timeseries"
         },
         {
@@ -396,7 +396,7 @@ data:
               "refId": "A"
             }
           ],
-          "title": "Job Events 1h",
+          "title": "Recent Job Events 1h",
           "type": "timeseries"
         },
         {
