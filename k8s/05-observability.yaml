@@ -729,6 +729,17 @@ data:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
+  name: prometheus-data
+  namespace: repo-search
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
   name: grafana-data
   namespace: repo-search
 spec:
@@ -782,7 +793,8 @@ spec:
           configMap:
             name: prometheus-config
         - name: prometheus-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: prometheus-data
 ---
 apiVersion: v1
 kind: Service
