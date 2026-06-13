@@ -8,6 +8,7 @@ Ovaj sloj počinje metrikama performansi mikroservisa i lokalnim Grafana stack-o
 - Metrics endpoint za worker na `job-worker:9100`.
 - Prometheus scrape za aplikacione, worker, Postgres i kontejnerske metrike.
 - Grafana datasource i početni dashboard za request rate, p95 latenciju, latenciju zavisnosti, greške, embedding, dubinu job reda, CPU i memoriju.
+  Paneli `Request Rate`, `Inbound Latency p95` i `5xx Error Rate` filtriraju `/health` i `/api/health` rute, kako bi prikazivali realan korisnički/API saobraćaj, a ne Kubernetes readiness provere.
 - Postgres exporter za zdravlje i opterećenje baze.
 - kube-state-metrics za stanje Kubernetes objekata: podovi, deployment-i, restarti i replike.
 - node-exporter za CPU i memoriju Kubernetes node-a.
