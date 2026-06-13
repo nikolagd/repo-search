@@ -12,6 +12,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 
 _TRACING_READY = False
 _FASTAPI_INSTRUMENTED_APPS: set[int] = set()
+PARSER_MODES = ("llm", "llm_repaired", "fallback", "fallback_service_error")
 
 HTTP_REQUESTS_TOTAL = Counter(
     "repo_search_http_requests_total",
@@ -232,6 +233,8 @@ def _setup_tracing(service_name: str, app: FastAPI | None = None) -> None:
 
 def setup_observability(app: FastAPI, service_name: str) -> None:
     app.state.service_name = service_name
+    for parser_mode in PARSER_MODES:
+        RETRIEVAL_PARSER_EVENTS_TOTAL.labels(service_name, parser_mode)
     _setup_tracing(service_name, app)
 
     @app.middleware("http")
@@ -388,7 +391,7 @@ def _result_bucket(result_count: int) -> str:
 def normalize_parser_mode(parser_mode: str | None, used_fallback: bool = False) -> str:
     if parser_mode:
         normalized = parser_mode.strip().lower().replace("-", "_")
-        if normalized in {"llm", "llm_repaired", "fallback", "fallback_service_error"}:
+        if normalized in PARSER_MODES:
             return normalized
     return "fallback" if used_fallback else "llm"
 

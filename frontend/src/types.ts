@@ -96,7 +96,7 @@ export interface EmbeddingStatusResponse {
   embedding_job: HarvestJob | null;
 }
 
-export type ModelObservabilityWindow = "15m" | "1h" | "6h" | "24h";
+export type ModelObservabilityWindow = "15m" | "1h" | "6h" | "24h" | "7d" | "15d";
 
 export interface ModelObservabilityCard {
   label: string;

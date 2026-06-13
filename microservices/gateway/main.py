@@ -33,6 +33,8 @@ MODEL_OBSERVABILITY_WINDOWS = {
     "1h": 60 * 60,
     "6h": 6 * 60 * 60,
     "24h": 24 * 60 * 60,
+    "7d": 7 * 24 * 60 * 60,
+    "15d": 15 * 24 * 60 * 60,
 }
 
 
@@ -392,9 +394,13 @@ async def admin_model_observability(request: Request, window: str = "1h") -> dic
         queries = {
             "searches": f"sum(increase(repo_search_retrieval_searches_total[{rate_window}]))",
             "zero_results": f"sum(increase(repo_search_retrieval_zero_results_total[{rate_window}]))",
-            "fallback_searches": (
-                "sum(increase(repo_search_retrieval_searches_total"
-                f'{{parser_mode=~"fallback|fallback_service_error"}}[{rate_window}]))'
+            "parser_events": (
+                "sum(increase(repo_search_retrieval_parser_events_total"
+                f'{{service="search-service"}}[{rate_window}]))'
+            ),
+            "fallback_parser_events": (
+                "sum(increase(repo_search_retrieval_parser_events_total"
+                f'{{service="search-service",parser_mode=~"fallback|fallback_service_error"}}[{rate_window}]))'
             ),
             "p95_total_latency": (
                 "histogram_quantile(0.95, "
@@ -402,24 +408,24 @@ async def admin_model_observability(request: Request, window: str = "1h") -> dic
                 f'{{stage="total"}}[{rate_window}])))'
             ),
             "avg_result_count": (
-                f"sum(rate(repo_search_retrieval_final_results_sum[{rate_window}])) "
-                f"/ clamp_min(sum(rate(repo_search_retrieval_final_results_count[{rate_window}])), 1)"
+                f"sum(increase(repo_search_retrieval_final_results_sum[{rate_window}])) "
+                f"/ clamp_min(sum(increase(repo_search_retrieval_final_results_count[{rate_window}])), 1)"
             ),
             "avg_candidates": (
-                f"sum(rate(repo_search_retrieval_vector_candidates_sum[{rate_window}])) "
-                f"/ clamp_min(sum(rate(repo_search_retrieval_vector_candidates_count[{rate_window}])), 1)"
+                f"sum(increase(repo_search_retrieval_vector_candidates_sum[{rate_window}])) "
+                f"/ clamp_min(sum(increase(repo_search_retrieval_vector_candidates_count[{rate_window}])), 1)"
             ),
             "avg_embedding_queries": (
-                f"sum(rate(repo_search_retrieval_embedding_query_count_sum[{rate_window}])) "
-                f"/ clamp_min(sum(rate(repo_search_retrieval_embedding_query_count_count[{rate_window}])), 1)"
+                f"sum(increase(repo_search_retrieval_embedding_query_count_sum[{rate_window}])) "
+                f"/ clamp_min(sum(increase(repo_search_retrieval_embedding_query_count_count[{rate_window}])), 1)"
             ),
             "avg_top_score": (
-                f"sum(rate(repo_search_retrieval_top_score_sum[{rate_window}])) "
-                f"/ clamp_min(sum(rate(repo_search_retrieval_top_score_count[{rate_window}])), 1)"
+                f"sum(increase(repo_search_retrieval_top_score_sum[{rate_window}])) "
+                f"/ clamp_min(sum(increase(repo_search_retrieval_top_score_count[{rate_window}])), 1)"
             ),
             "avg_score": (
-                f"sum(rate(repo_search_retrieval_average_score_sum[{rate_window}])) "
-                f"/ clamp_min(sum(rate(repo_search_retrieval_average_score_count[{rate_window}])), 1)"
+                f"sum(increase(repo_search_retrieval_average_score_sum[{rate_window}])) "
+                f"/ clamp_min(sum(increase(repo_search_retrieval_average_score_count[{rate_window}])), 1)"
             ),
             "coverage": "avg(repo_search_retrieval_embedding_coverage_ratio)",
             "stage_latency": (
@@ -440,9 +446,10 @@ async def admin_model_observability(request: Request, window: str = "1h") -> dic
     search_rate = results[-1]
     total_searches = _prometheus_vector_value(prometheus["searches"])
     zero_results = _prometheus_vector_value(prometheus["zero_results"])
-    fallback_searches = _prometheus_vector_value(prometheus["fallback_searches"])
+    parser_events = _prometheus_vector_value(prometheus["parser_events"])
+    fallback_parser_events = _prometheus_vector_value(prometheus["fallback_parser_events"])
     zero_result_rate = zero_results / total_searches if total_searches else 0
-    fallback_rate = fallback_searches / total_searches if total_searches else 0
+    fallback_rate = fallback_parser_events / parser_events if parser_events else 0
 
     stage_latency = [
         {
@@ -459,6 +466,7 @@ async def admin_model_observability(request: Request, window: str = "1h") -> dic
             "count": _float_value(item.get("value", [None, 0])[1]),
         }
         for item in prometheus["parser_modes"]
+        if _float_value(item.get("value", [None, 0])[1]) > 0
     ]
     parser_modes.sort(key=lambda item: item["parser_mode"])
 

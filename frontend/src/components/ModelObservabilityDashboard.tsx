@@ -1,4 +1,4 @@
-import { Activity, BarChart3, BrainCircuit, Database, Gauge, RefreshCw } from "lucide-react";
+import { Activity, BarChart3, BrainCircuit, Database, Gauge, Info, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -9,9 +9,49 @@ import type {
   ModelObservabilityWindow,
 } from "../types";
 
-const WINDOWS: ModelObservabilityWindow[] = ["15m", "1h", "6h", "24h"];
+const WINDOWS: ModelObservabilityWindow[] = ["15m", "1h", "6h", "24h", "7d", "15d"];
+
+const CARD_TOOLTIPS: Record<string, string> = {
+  Searches: "Total completed retrieval searches in the selected time window.",
+  "Zero-result rate": "Share of searches that returned no final results in the selected time window.",
+  "Fallback parser rate": "Share of searches where the query parser used fallback parsing instead of the normal LLM parser path.",
+  "p95 search latency": "95th percentile total retrieval latency. 95% of completed searches were at or below this duration.",
+  "Embedding coverage": "Share of indexed publications that currently have stored embeddings.",
+};
+
+const FIELD_TOOLTIPS: Record<string, string> = {
+  "Embedding model": "Embedding model used to convert search queries and publications into vectors.",
+  "Embedding device": "Runtime device used by the embedding service, for example CPU or CUDA.",
+  "Embedding dimension": "Number of numeric dimensions in each embedding vector.",
+  "LLM provider": "Provider used by the query parser service for natural-language query planning.",
+  "LLM model": "LLM model configured for query parsing.",
+  "Average results": "Average number of final ranked results returned per completed search in the selected window.",
+  "Average candidates": "Average number of vector database candidates fetched before merge and ranking.",
+  "Embedding queries": "Average number of semantic embedding queries generated from one user search.",
+  "Average top score": "Average highest ranking score returned by each completed search. Zero-result searches contribute 0.",
+  "Average score": "Average of the per-search average result score. Zero-result searches contribute 0.",
+  Indexed: "Total number of publications currently stored in the application index.",
+  "With embeddings": "Number of indexed publications that have an embedding vector.",
+  Missing: "Number of indexed publications that do not yet have an embedding vector.",
+  Coverage: "Share of indexed publications with embeddings.",
+  Repository: "Repository name from which publications were harvested.",
+  Publications: "Number of indexed publications for this repository.",
+  "Query parse": "Time to turn the user query into filters and embedding query variants.",
+  "Query embedding": "Time to convert parsed query variants into embedding vectors.",
+  "Vector retrieval": "Time spent fetching nearest matches from PostgreSQL/pgvector.",
+  "Candidate merge": "Time to merge candidates from multiple embedding queries.",
+  Ranking: "Time to score, boost, sort, and trim final results.",
+  Total: "Full search-service retrieval time for one request.",
+  Llm: "Parser used the configured LLM path.",
+  Fallback: "Parser used local fallback parsing.",
+  "Fallback service error": "Parser used fallback parsing because the normal parser service path failed.",
+};
 
 function formatMetric(value: number, unit?: string): string {
+  if (unit === "count") {
+    return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(Math.round(value));
+  }
+
   if (unit === "percent") {
     return `${(value * 100).toFixed(1)}%`;
   }
@@ -27,7 +67,8 @@ function formatMetric(value: number, unit?: string): string {
     return new Intl.NumberFormat("en", { maximumFractionDigits: 1, notation: "compact" }).format(value);
   }
 
-  return value.toFixed(value % 1 === 0 ? 0 : 2);
+  const roundedToTwoDecimals = Math.round((value + Number.EPSILON) * 100) / 100;
+  return roundedToTwoDecimals.toFixed(roundedToTwoDecimals % 1 === 0 ? 0 : 2);
 }
 
 function formatKey(value: string): string {
@@ -36,12 +77,37 @@ function formatKey(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function tooltipFor(label: string, fallback?: string): string {
+  const normalizedLabel = label.toLowerCase();
+  const fieldKey = Object.keys(FIELD_TOOLTIPS).find((key) => key.toLowerCase() === normalizedLabel);
+  const cardKey = Object.keys(CARD_TOOLTIPS).find((key) => key.toLowerCase() === normalizedLabel);
+
+  if (fieldKey) {
+    return FIELD_TOOLTIPS[fieldKey];
+  }
+
+  if (cardKey) {
+    return CARD_TOOLTIPS[cardKey];
+  }
+
+  return fallback ?? label;
+}
+
+function MetricLabel({ children, tooltip }: { children: string; tooltip: string }) {
+  return (
+    <span className="metric-label" title={tooltip}>
+      <span>{children}</span>
+      <Info aria-hidden="true" size={13} />
+    </span>
+  );
+}
+
 function ObservabilityCard({ card }: { card: ModelObservabilityCard }) {
   return (
     <article className="model-card">
       <Gauge aria-hidden="true" size={19} />
       <div>
-        <span>{card.label}</span>
+        <MetricLabel tooltip={tooltipFor(card.label)}>{card.label}</MetricLabel>
         <strong>{formatMetric(card.value, card.unit)}</strong>
       </div>
     </article>
@@ -140,23 +206,23 @@ export default function ModelObservabilityDashboard() {
               </div>
               <dl className="model-definition-list">
                 <div>
-                  <dt>Embedding model</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Embedding model")}>Embedding model</MetricLabel></dt>
                   <dd>{data.model_config.embedding_model || "-"}</dd>
                 </div>
                 <div>
-                  <dt>Embedding device</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Embedding device")}>Embedding device</MetricLabel></dt>
                   <dd>{data.model_config.embedding_device || "-"}</dd>
                 </div>
                 <div>
-                  <dt>Embedding dimension</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Embedding dimension")}>Embedding dimension</MetricLabel></dt>
                   <dd>{data.model_config.embedding_dimension ?? "-"}</dd>
                 </div>
                 <div>
-                  <dt>LLM provider</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("LLM provider")}>LLM provider</MetricLabel></dt>
                   <dd>{data.model_config.llm_provider || "-"}</dd>
                 </div>
                 <div>
-                  <dt>LLM model</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("LLM model")}>LLM model</MetricLabel></dt>
                   <dd>{data.model_config.llm_model || "-"}</dd>
                 </div>
               </dl>
@@ -169,23 +235,23 @@ export default function ModelObservabilityDashboard() {
               </div>
               <dl className="model-definition-list compact">
                 <div>
-                  <dt>Average results</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Average results")}>Average results</MetricLabel></dt>
                   <dd>{formatMetric(data.retrieval_output.avg_result_count)}</dd>
                 </div>
                 <div>
-                  <dt>Average candidates</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Average candidates")}>Average candidates</MetricLabel></dt>
                   <dd>{formatMetric(data.retrieval_output.avg_candidates)}</dd>
                 </div>
                 <div>
-                  <dt>Embedding queries</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Embedding queries")}>Embedding queries</MetricLabel></dt>
                   <dd>{formatMetric(data.retrieval_output.avg_embedding_queries)}</dd>
                 </div>
                 <div>
-                  <dt>Average top score</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Average top score")}>Average top score</MetricLabel></dt>
                   <dd>{formatMetric(data.retrieval_output.avg_top_score)}</dd>
                 </div>
                 <div>
-                  <dt>Average score</dt>
+                  <dt><MetricLabel tooltip={tooltipFor("Average score")}>Average score</MetricLabel></dt>
                   <dd>{formatMetric(data.retrieval_output.avg_score)}</dd>
                 </div>
               </dl>
@@ -201,7 +267,7 @@ export default function ModelObservabilityDashboard() {
               <div className="metric-bars">
                 {data.stage_latency.map((item) => (
                   <div className="metric-bar-row" key={item.stage}>
-                    <span>{formatKey(item.stage)}</span>
+                    <MetricLabel tooltip={tooltipFor(formatKey(item.stage))}>{formatKey(item.stage)}</MetricLabel>
                     <div className="metric-bar-track">
                       <div style={{ width: `${Math.max(4, (item.p95_seconds / maxStageLatency) * 100)}%` }} />
                     </div>
@@ -220,11 +286,11 @@ export default function ModelObservabilityDashboard() {
               <div className="metric-bars">
                 {data.parser_modes.map((item) => (
                   <div className="metric-bar-row" key={item.parser_mode}>
-                    <span>{formatKey(item.parser_mode)}</span>
+                    <MetricLabel tooltip={tooltipFor(formatKey(item.parser_mode))}>{formatKey(item.parser_mode)}</MetricLabel>
                     <div className="metric-bar-track">
                       <div style={{ width: `${Math.max(4, (item.count / maxParserCount) * 100)}%` }} />
                     </div>
-                    <strong>{formatMetric(item.count)}</strong>
+                    <strong>{formatMetric(item.count, "count")}</strong>
                   </div>
                 ))}
                 {!data.parser_modes.length && <p className="model-muted">Parser mode data appears after searches are parsed.</p>}
@@ -238,28 +304,28 @@ export default function ModelObservabilityDashboard() {
               <h3>Index health</h3>
             </div>
             <div className="index-summary">
-              <span>Indexed {formatMetric(data.index.indexed_publications)}</span>
-              <span>With embeddings {formatMetric(data.index.publications_with_embeddings)}</span>
-              <span>Missing {formatMetric(data.index.missing_embeddings)}</span>
-              <span>Coverage {formatMetric(data.index.embedding_coverage_ratio, "percent")}</span>
+              <span title={tooltipFor("Indexed")}>Indexed {formatMetric(data.index.indexed_publications, "count")}</span>
+              <span title={tooltipFor("With embeddings")}>With embeddings {formatMetric(data.index.publications_with_embeddings, "count")}</span>
+              <span title={tooltipFor("Missing")}>Missing {formatMetric(data.index.missing_embeddings, "count")}</span>
+              <span title={tooltipFor("Coverage")}>Coverage {formatMetric(data.index.embedding_coverage_ratio, "percent")}</span>
             </div>
             <div className="model-table-wrap">
               <table className="model-table">
                 <thead>
                   <tr>
-                    <th>Repository</th>
-                    <th>Publications</th>
-                    <th>With embeddings</th>
-                    <th>Missing</th>
+                    <th title={tooltipFor("Repository")}>Repository</th>
+                    <th title={tooltipFor("Publications")}>Publications</th>
+                    <th title={tooltipFor("With embeddings")}>With embeddings</th>
+                    <th title={tooltipFor("Missing")}>Missing</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.index.repositories.map((repository) => (
                     <tr key={repository.repository}>
                       <td>{repository.repository}</td>
-                      <td>{repository.publications}</td>
-                      <td>{repository.publications_with_embeddings}</td>
-                      <td>{repository.missing_embeddings}</td>
+                      <td>{formatMetric(repository.publications, "count")}</td>
+                      <td>{formatMetric(repository.publications_with_embeddings, "count")}</td>
+                      <td>{formatMetric(repository.missing_embeddings, "count")}</td>
                     </tr>
                   ))}
                 </tbody>

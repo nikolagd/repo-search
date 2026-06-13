@@ -681,11 +681,15 @@ input:focus {
   flex: 0 0 auto;
 }
 
-.model-card span {
+.model-card > div > span {
   display: block;
   color: #667085;
   font-size: 0.78rem;
   font-weight: 800;
+}
+
+.model-card .metric-label {
+  display: inline-flex;
 }
 
 .model-card strong {
@@ -739,6 +743,26 @@ input:focus {
   font-weight: 800;
 }
 
+.metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: inherit;
+  cursor: help;
+  line-height: 1.2;
+}
+
+.metric-label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.metric-label svg {
+  flex: 0 0 auto;
+  color: #98a2b3;
+}
+
 .model-definition-list dd {
   margin: 0;
   color: #111827;
@@ -758,8 +782,14 @@ input:focus {
   align-items: center;
 }
 
-.metric-bar-row span,
+.metric-bar-row > span,
 .metric-bar-row strong {
+  color: #344054;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.metric-bar-row .metric-label {
   color: #344054;
   font-size: 0.84rem;
   font-weight: 800;
