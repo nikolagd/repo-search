@@ -1,6 +1,7 @@
 import json
 import os
 
+from microservices.common.app_logging import emit_app_event
 from microservices.common.http import observed_sync_request
 from microservices.common.observability import trace_span
 
@@ -117,7 +118,15 @@ User query:
         except Exception as exc:
             if span is not None:
                 span.set_attribute("repo_search.llm.failed", True)
-            print("LLM parser failed:", exc)
+            emit_app_event(
+                "query.parser_failed",
+                "query-service",
+                provider=LLM_PROVIDER,
+                model=LLM_MODEL,
+                query_length=len(query),
+                error=str(exc),
+                fallback_used=True,
+            )
             return None
 
 
@@ -160,5 +169,14 @@ Bad plan:
         except Exception as exc:
             if span is not None:
                 span.set_attribute("repo_search.llm.failed", True)
-            print("LLM repair failed:", exc)
+            emit_app_event(
+                "query.parser_failed",
+                "query-service",
+                provider=LLM_PROVIDER,
+                model=LLM_MODEL,
+                query_length=len(query),
+                repair_reason=reason,
+                error=str(exc),
+                fallback_used=True,
+            )
             return None

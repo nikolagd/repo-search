@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { fetchJson, getErrorMessage } from "./api/client";
 import AdminPanel from "./components/AdminPanel";
+import ModelObservabilityDashboard from "./components/ModelObservabilityDashboard";
 import OverviewStats from "./components/OverviewStats";
 import ResultsPanel from "./components/ResultsPanel";
 import SearchPanel from "./components/SearchPanel";
@@ -119,6 +120,7 @@ export default function App() {
         <Route path="/admin" element={<AdminPanel onOverviewRefresh={loadOverview} />} />
         <Route path="/admin/login" element={<AdminPanel authMode="login" onOverviewRefresh={loadOverview} />} />
         <Route path="/admin/register" element={<AdminPanel authMode="register" onOverviewRefresh={loadOverview} />} />
+        <Route path="/admin/model-observability" element={<ModelObservabilityDashboard />} />
         <Route path="*" element={<Navigate to="/search" replace />} />
       </Routes>
     </main>

@@ -95,3 +95,60 @@ export interface EmbeddingStatusResponse {
   missing_embeddings: number;
   embedding_job: HarvestJob | null;
 }
+
+export type ModelObservabilityWindow = "15m" | "1h" | "6h" | "24h";
+
+export interface ModelObservabilityCard {
+  label: string;
+  value: number;
+  unit: "count" | "percent" | "seconds";
+}
+
+export interface RetrievalStageLatency {
+  stage: string;
+  p95_seconds: number;
+}
+
+export interface ParserModeCount {
+  parser_mode: string;
+  count: number;
+}
+
+export interface RepositoryIndexStats {
+  repository: string;
+  publications: number;
+  publications_with_embeddings: number;
+  missing_embeddings: number;
+}
+
+export interface ModelObservabilityResponse {
+  window: ModelObservabilityWindow;
+  generated_at: string;
+  model_config: {
+    llm_provider?: string;
+    llm_model?: string;
+    llm_url?: string;
+    llm_timeout_seconds?: number;
+    embedding_model?: string;
+    embedding_device?: string;
+    embedding_dimension?: number | null;
+    ranking_config?: Record<string, number>;
+  };
+  index: {
+    indexed_publications: number;
+    publications_with_embeddings: number;
+    missing_embeddings: number;
+    embedding_coverage_ratio: number;
+    repositories: RepositoryIndexStats[];
+  };
+  cards: ModelObservabilityCard[];
+  retrieval_output: {
+    avg_result_count: number;
+    avg_candidates: number;
+    avg_embedding_queries: number;
+    avg_top_score: number;
+    avg_score: number;
+  };
+  stage_latency: RetrievalStageLatency[];
+  parser_modes: ParserModeCount[];
+}

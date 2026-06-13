@@ -8,10 +8,20 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
+from microservices.common.app_logging import app_observability_log_query_text, emit_app_event
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
 from microservices.common.http import observed_async_request, raise_for_service
-from microservices.common.observability import observe_search_request, setup_observability, trace_span
+from microservices.common.observability import (
+    normalize_parser_mode,
+    observe_retrieval_stage,
+    observe_search_request,
+    record_retrieval_parser_event,
+    record_retrieval_search,
+    set_retrieval_index_stats,
+    set_retrieval_model_info,
+    setup_observability,
+)
 from microservices.common.schemas import HealthResponse, SearchRequest
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
@@ -26,6 +36,7 @@ TOPIC_TITLE_BOOST = float(os.getenv("SEARCH_TOPIC_TITLE_BOOST", "0.04"))
 TOPIC_ABSTRACT_BOOST = float(os.getenv("SEARCH_TOPIC_ABSTRACT_BOOST", "0.01"))
 RANKING_PHRASE_BOOST = float(os.getenv("SEARCH_RANKING_PHRASE_BOOST", "0.02"))
 QUERY_COVERAGE_BOOST = float(os.getenv("SEARCH_QUERY_COVERAGE_BOOST", "0.003"))
+LOW_SCORE_THRESHOLD = float(os.getenv("APP_OBSERVABILITY_LOW_SCORE_THRESHOLD", "0.35"))
 
 
 class PublicationEmbeddingRequest(BaseModel):
@@ -95,6 +106,18 @@ def ensure_schema() -> None:
 @app.on_event("startup")
 def startup() -> None:
     ensure_schema()
+    set_retrieval_model_info(
+        "search-service",
+        "ranking_config",
+        {
+            "candidate_multiplier": CANDIDATE_MULTIPLIER,
+            "topic_title_boost": TOPIC_TITLE_BOOST,
+            "topic_abstract_boost": TOPIC_ABSTRACT_BOOST,
+            "ranking_phrase_boost": RANKING_PHRASE_BOOST,
+            "query_coverage_boost": QUERY_COVERAGE_BOOST,
+        },
+    )
+    app.state.collect_metrics = refresh_retrieval_index_metrics
 
 
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
@@ -128,7 +151,9 @@ async def parse_search_query(query: str) -> dict:
             raise_for_service(response, "Query service")
             return response.json()
         except Exception:
-            return parse_query_fallback(query)
+            plan = parse_query_fallback(query)
+            plan["parser_mode"] = "fallback_service_error"
+            return plan
 
 
 async def embed_query(query: str) -> list[float]:
@@ -200,8 +225,9 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
     """
     params.append(limit)
 
-    with trace_span(
-        "search.vector_db",
+    with observe_retrieval_stage(
+        "search-service",
+        "vector_retrieval",
         {
             "repo_search.candidate_limit": limit,
             "repo_search.year_from": year_from,
@@ -220,100 +246,7 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
             conn.close()
 
 
-@app.post("/search", dependencies=[Depends(require_api_token)])
-async def search(request: SearchRequest) -> dict[str, Any]:
-    with observe_search_request("search-service") as span:
-        query = request.query.strip()
-        if span is not None:
-            span.set_attribute("repo_search.query_length", len(query))
-            span.set_attribute("repo_search.limit", request.limit)
-        parsed = await parse_search_query(query)
-        embedding_queries = [item for item in parsed["embedding_queries"] if item.strip()]
-        if span is not None:
-            span.set_attribute("repo_search.embedding_query_count", len(embedding_queries))
-            span.set_attribute("repo_search.used_fallback", bool(parsed.get("used_fallback")))
-        candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
-        merged: dict[int, dict[str, Any]] = {}
-
-        for embedding_query in embedding_queries:
-            query_vector = await embed_query(embedding_query)
-            rows = fetch_vector_results(query_vector, candidate_limit, parsed["year_from"], parsed["year_to"])
-
-            for rank, row in enumerate(rows, start=1):
-                publication_id = row[0]
-                cosine_distance = float(row[5])
-                cosine_similarity = 1 - cosine_distance
-                existing = merged.get(publication_id)
-
-                if existing is None:
-                    merged[publication_id] = {
-                        "id": row[0],
-                        "title": row[1],
-                        "abstract": row[2],
-                        "source_url": row[3],
-                        "date": row[4],
-                        "cosine_distance": cosine_distance,
-                        "cosine_similarity": cosine_similarity,
-                        "repository": row[6],
-                        "authors": list(row[7] or []),
-                        "matched_query": embedding_query,
-                        "matched_queries": {embedding_query},
-                        "best_rank": rank,
-                    }
-                    continue
-
-                existing["matched_queries"].add(embedding_query)
-                if cosine_similarity > existing["cosine_similarity"]:
-                    existing["cosine_distance"] = cosine_distance
-                    existing["cosine_similarity"] = cosine_similarity
-                    existing["matched_query"] = embedding_query
-                    existing["best_rank"] = rank
-
-        results = []
-        for result in merged.values():
-            topic_boost = phrase_boost(
-                result["title"],
-                result["abstract"],
-                parsed.get("topic_phrases", []),
-                TOPIC_TITLE_BOOST,
-                TOPIC_ABSTRACT_BOOST,
-            )
-            ranking_boost = phrase_boost(
-                result["title"],
-                result["abstract"],
-                parsed.get("ranking_phrases", []),
-                RANKING_PHRASE_BOOST,
-                RANKING_PHRASE_BOOST,
-            )
-            coverage_boost = min(len(result["matched_queries"]) * QUERY_COVERAGE_BOOST, 0.015)
-            result["topic_boost"] = round(topic_boost, 6)
-            result["ranking_boost"] = round(ranking_boost, 6)
-            result["coverage_boost"] = round(coverage_boost, 6)
-            result["score"] = round(result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost, 6)
-            result["cosine_distance"] = round(result["cosine_distance"], 6)
-            result["cosine_similarity"] = round(result["cosine_similarity"], 6)
-            result["date"] = serialize_datetime(result["date"])
-            result["matched_queries"] = sorted(result["matched_queries"])
-            results.append(result)
-
-        results.sort(key=lambda item: item["score"], reverse=True)
-        results = results[:request.limit]
-        if span is not None:
-            span.set_attribute("repo_search.result_count", len(results))
-            if results:
-                span.set_attribute("repo_search.top_score", results[0]["score"])
-
-        return {
-            "query": query,
-            "limit": request.limit,
-            "plan": parsed,
-            "results": results,
-            "total": len(results),
-        }
-
-
-@app.get("/embeddings/status", dependencies=[Depends(require_api_token)])
-def embedding_status() -> dict[str, int]:
+def load_index_status() -> dict[str, Any]:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -327,13 +260,210 @@ def embedding_status() -> dict[str, int]:
                 """
             )
             indexed, with_embeddings, missing = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT COALESCE(r.name, 'unknown') AS repository,
+                       COUNT(p.id) AS publications,
+                       COUNT(p.id) FILTER (WHERE p.embedding IS NOT NULL) AS publications_with_embeddings,
+                       COUNT(p.id) FILTER (WHERE p.embedding IS NULL) AS missing_embeddings
+                FROM publication p
+                LEFT JOIN repository r ON r.id = p.repository_id
+                GROUP BY r.name
+                ORDER BY r.name
+                """
+            )
+            repositories = [
+                {
+                    "repository": row[0],
+                    "publications": row[1],
+                    "publications_with_embeddings": row[2],
+                    "missing_embeddings": row[3],
+                }
+                for row in cur.fetchall()
+            ]
     finally:
         conn.close()
 
+    coverage = with_embeddings / indexed if indexed else 0
     return {
         "indexed_publications": indexed,
         "publications_with_embeddings": with_embeddings,
         "missing_embeddings": missing,
+        "embedding_coverage_ratio": coverage,
+        "repositories": repositories,
+    }
+
+
+def refresh_retrieval_index_metrics() -> None:
+    status = load_index_status()
+    set_retrieval_index_stats(
+        "search-service",
+        status["indexed_publications"],
+        status["publications_with_embeddings"],
+        status["missing_embeddings"],
+        status["repositories"],
+    )
+
+
+@app.post("/search", dependencies=[Depends(require_api_token)])
+async def search(request: SearchRequest) -> dict[str, Any]:
+    with observe_search_request("search-service") as span:
+        with observe_retrieval_stage("search-service", "total"):
+            query = request.query.strip()
+            if span is not None:
+                span.set_attribute("repo_search.query_length", len(query))
+                span.set_attribute("repo_search.limit", request.limit)
+
+            with observe_retrieval_stage("search-service", "query_parse") as parse_span:
+                parsed = await parse_search_query(query)
+                parser_mode = normalize_parser_mode(parsed.get("parser_mode"), bool(parsed.get("used_fallback")))
+                record_retrieval_parser_event("search-service", parser_mode)
+                if parse_span is not None:
+                    parse_span.set_attribute("repo_search.parser_mode", parser_mode)
+
+            embedding_queries = [item for item in parsed["embedding_queries"] if item.strip()]
+            if span is not None:
+                span.set_attribute("repo_search.embedding_query_count", len(embedding_queries))
+                span.set_attribute("repo_search.used_fallback", bool(parsed.get("used_fallback")))
+                span.set_attribute("repo_search.parser_mode", parser_mode)
+            candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
+            merged: dict[int, dict[str, Any]] = {}
+            vector_candidate_count = 0
+
+            for embedding_query in embedding_queries:
+                with observe_retrieval_stage("search-service", "query_embedding"):
+                    query_vector = await embed_query(embedding_query)
+                rows = fetch_vector_results(query_vector, candidate_limit, parsed["year_from"], parsed["year_to"])
+                vector_candidate_count += len(rows)
+
+                with observe_retrieval_stage("search-service", "candidate_merge"):
+                    for rank, row in enumerate(rows, start=1):
+                        publication_id = row[0]
+                        cosine_distance = float(row[5])
+                        cosine_similarity = 1 - cosine_distance
+                        existing = merged.get(publication_id)
+
+                        if existing is None:
+                            merged[publication_id] = {
+                                "id": row[0],
+                                "title": row[1],
+                                "abstract": row[2],
+                                "source_url": row[3],
+                                "date": row[4],
+                                "cosine_distance": cosine_distance,
+                                "cosine_similarity": cosine_similarity,
+                                "repository": row[6],
+                                "authors": list(row[7] or []),
+                                "matched_query": embedding_query,
+                                "matched_queries": {embedding_query},
+                                "best_rank": rank,
+                            }
+                            continue
+
+                        existing["matched_queries"].add(embedding_query)
+                        if cosine_similarity > existing["cosine_similarity"]:
+                            existing["cosine_distance"] = cosine_distance
+                            existing["cosine_similarity"] = cosine_similarity
+                            existing["matched_query"] = embedding_query
+                            existing["best_rank"] = rank
+
+            with observe_retrieval_stage("search-service", "ranking"):
+                results = []
+                for result in merged.values():
+                    topic_boost = phrase_boost(
+                        result["title"],
+                        result["abstract"],
+                        parsed.get("topic_phrases", []),
+                        TOPIC_TITLE_BOOST,
+                        TOPIC_ABSTRACT_BOOST,
+                    )
+                    ranking_boost = phrase_boost(
+                        result["title"],
+                        result["abstract"],
+                        parsed.get("ranking_phrases", []),
+                        RANKING_PHRASE_BOOST,
+                        RANKING_PHRASE_BOOST,
+                    )
+                    coverage_boost = min(len(result["matched_queries"]) * QUERY_COVERAGE_BOOST, 0.015)
+                    result["topic_boost"] = round(topic_boost, 6)
+                    result["ranking_boost"] = round(ranking_boost, 6)
+                    result["coverage_boost"] = round(coverage_boost, 6)
+                    result["score"] = round(result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost, 6)
+                    result["cosine_distance"] = round(result["cosine_distance"], 6)
+                    result["cosine_similarity"] = round(result["cosine_similarity"], 6)
+                    result["date"] = serialize_datetime(result["date"])
+                    result["matched_queries"] = sorted(result["matched_queries"])
+                    results.append(result)
+
+                results.sort(key=lambda item: item["score"], reverse=True)
+                results = results[:request.limit]
+
+            result_scores = [float(result["score"]) for result in results]
+            record_retrieval_search(
+                "search-service",
+                parser_mode,
+                len(embedding_queries),
+                vector_candidate_count,
+                result_scores,
+            )
+            top_score = max(result_scores) if result_scores else 0
+            average_score = sum(result_scores) / len(result_scores) if result_scores else 0
+            log_fields = {
+                "query_length": len(query),
+                "parser_mode": parser_mode,
+                "embedding_query_count": len(embedding_queries),
+                "vector_candidate_count": vector_candidate_count,
+                "result_count": len(results),
+                "top_score": top_score,
+                "average_score": average_score,
+            }
+            if app_observability_log_query_text():
+                log_fields["query"] = query
+            emit_app_event("search.completed", "search-service", **log_fields)
+            if not results:
+                emit_app_event("search.zero_results", "search-service", **log_fields)
+            elif top_score < LOW_SCORE_THRESHOLD:
+                emit_app_event("retrieval.low_score", "search-service", **log_fields)
+
+            if span is not None:
+                span.set_attribute("repo_search.result_count", len(results))
+                span.set_attribute("repo_search.vector_candidates", vector_candidate_count)
+                if results:
+                    span.set_attribute("repo_search.top_score", results[0]["score"])
+
+        return {
+            "query": query,
+            "limit": request.limit,
+            "plan": parsed,
+            "results": results,
+            "total": len(results),
+        }
+
+
+@app.get("/embeddings/status", dependencies=[Depends(require_api_token)])
+def embedding_status() -> dict[str, int]:
+    status = load_index_status()
+
+    return {
+        "indexed_publications": status["indexed_publications"],
+        "publications_with_embeddings": status["publications_with_embeddings"],
+        "missing_embeddings": status["missing_embeddings"],
+    }
+
+
+@app.get("/model-observability/status", dependencies=[Depends(require_api_token)])
+def model_observability_status() -> dict[str, Any]:
+    index_status = load_index_status()
+    return {
+        "ranking_config": {
+            "candidate_multiplier": CANDIDATE_MULTIPLIER,
+            "topic_title_boost": TOPIC_TITLE_BOOST,
+            "topic_abstract_boost": TOPIC_ABSTRACT_BOOST,
+            "ranking_phrase_boost": RANKING_PHRASE_BOOST,
+            "query_coverage_boost": QUERY_COVERAGE_BOOST,
+        },
+        "index": index_status,
     }
 
 

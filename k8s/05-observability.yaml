@@ -125,7 +125,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (service) (rate(repo_search_http_requests_total[5m]))",
+              "expr": "sum by (service) (rate(repo_search_http_requests_total{route!~\"/health|/api/health\"}[5m]))",
               "legendFormat": "{{service}}",
               "refId": "A"
             }
@@ -163,7 +163,7 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum by (le, service) (rate(repo_search_http_request_duration_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le, service) (rate(repo_search_http_request_duration_seconds_bucket{route!~\"/health|/api/health\"}[5m])))",
               "legendFormat": "p95 {{service}}",
               "refId": "A"
             }
@@ -201,7 +201,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (service, status_code) (rate(repo_search_http_requests_total{status_code=~\"5..\"}[5m]))",
+              "expr": "sum by (service, status_code) (rate(repo_search_http_requests_total{route!~\"/health|/api/health\",status_code=~\"5..\"}[5m]))",
               "legendFormat": "{{service}} {{status_code}}",
               "refId": "A"
             }

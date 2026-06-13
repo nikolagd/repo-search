@@ -7,10 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from microservices.common.app_logging import emit_app_event
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
 from microservices.common.http import observed_sync_request
 from microservices.common.observability import (
+    record_harvest_records,
     record_job_duration,
     record_job_event,
     start_worker_observability,
@@ -199,6 +201,7 @@ def harvest_repository(job: dict[str, Any]) -> int:
             span.set_attribute("repo_search.oai.pages", page_num)
 
     request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
+    record_harvest_records(SERVICE_NAME, repository.get("name"), "succeeded", total_processed)
     return total_processed
 
 
@@ -239,6 +242,15 @@ def run_job(job: dict[str, Any]) -> None:
                 )
                 if span is not None:
                     span.set_attribute("repo_search.records_processed", processed)
+                emit_app_event(
+                    "job.harvest_completed",
+                    SERVICE_NAME,
+                    job_id=job["id"],
+                    repository_id=job.get("repository_id"),
+                    processed_records=processed,
+                    status="succeeded",
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                )
                 status = "succeeded"
                 return
 
@@ -252,6 +264,14 @@ def run_job(job: dict[str, Any]) -> None:
                 )
                 if span is not None:
                     span.set_attribute("repo_search.records_processed", processed)
+                emit_app_event(
+                    "job.embedding_backfill_completed",
+                    SERVICE_NAME,
+                    job_id=job["id"],
+                    processed_records=processed,
+                    status="succeeded",
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                )
                 status = "succeeded"
                 return
 
@@ -259,6 +279,16 @@ def run_job(job: dict[str, Any]) -> None:
         except Exception as exc:
             if span is not None:
                 span.set_attribute("repo_search.job.error", str(exc))
+            emit_app_event(
+                "job.failed",
+                SERVICE_NAME,
+                job_id=job["id"],
+                job_type=job["job_type"],
+                repository_id=job.get("repository_id"),
+                status="failed",
+                error=str(exc),
+                duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+            )
             finish_job(job["id"], "failed", None, f"Job failed: {exc}")
         finally:
             if span is not None:

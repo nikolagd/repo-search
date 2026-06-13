@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from fastapi import FastAPI, Request, Response
@@ -87,6 +88,98 @@ JOB_OLDEST_RUNNING_AGE_SECONDS = Gauge(
     "repo_search_job_oldest_running_age_seconds",
     "Age in seconds of the oldest running background job by type.",
     ["service", "job_type"],
+)
+RETRIEVAL_STAGE_DURATION_SECONDS = Histogram(
+    "repo_search_retrieval_stage_duration_seconds",
+    "Retrieval pipeline stage latency in seconds.",
+    ["service", "stage"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+)
+RETRIEVAL_SEARCHES_TOTAL = Counter(
+    "repo_search_retrieval_searches_total",
+    "Completed retrieval searches grouped by parser mode and result bucket.",
+    ["service", "parser_mode", "result_bucket"],
+)
+RETRIEVAL_ZERO_RESULTS_TOTAL = Counter(
+    "repo_search_retrieval_zero_results_total",
+    "Searches that returned no final results.",
+    ["service", "parser_mode"],
+)
+RETRIEVAL_PARSER_EVENTS_TOTAL = Counter(
+    "repo_search_retrieval_parser_events_total",
+    "Query parser outcomes used by the retrieval pipeline.",
+    ["service", "parser_mode"],
+)
+RETRIEVAL_EMBEDDING_QUERY_COUNT = Histogram(
+    "repo_search_retrieval_embedding_query_count",
+    "Number of generated embedding queries per user search.",
+    ["service"],
+    buckets=(0, 1, 2, 3, 4, 5, 8, 13),
+)
+RETRIEVAL_VECTOR_CANDIDATES = Histogram(
+    "repo_search_retrieval_vector_candidates",
+    "Number of vector candidates fetched before final ranking.",
+    ["service"],
+    buckets=(0, 1, 5, 10, 25, 50, 100, 250, 500),
+)
+RETRIEVAL_FINAL_RESULTS = Histogram(
+    "repo_search_retrieval_final_results",
+    "Number of final search results returned to the caller.",
+    ["service"],
+    buckets=(0, 1, 3, 5, 10, 20, 50),
+)
+RETRIEVAL_TOP_SCORE = Histogram(
+    "repo_search_retrieval_top_score",
+    "Top final result score for completed searches.",
+    ["service"],
+    buckets=(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25),
+)
+RETRIEVAL_AVERAGE_SCORE = Histogram(
+    "repo_search_retrieval_average_score",
+    "Average final result score for completed searches.",
+    ["service"],
+    buckets=(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25),
+)
+RETRIEVAL_RESULT_SCORE = Histogram(
+    "repo_search_retrieval_result_score",
+    "Individual returned result scores.",
+    ["service"],
+    buckets=(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25),
+)
+RETRIEVAL_INDEX_PUBLICATIONS = Gauge(
+    "repo_search_retrieval_index_publications",
+    "Indexed publications by repository.",
+    ["service", "repository"],
+)
+RETRIEVAL_INDEX_TOTAL_PUBLICATIONS = Gauge(
+    "repo_search_retrieval_index_total_publications",
+    "Total publications available for retrieval.",
+    ["service"],
+)
+RETRIEVAL_INDEX_WITH_EMBEDDINGS = Gauge(
+    "repo_search_retrieval_index_with_embeddings",
+    "Publications with stored embeddings.",
+    ["service"],
+)
+RETRIEVAL_INDEX_MISSING_EMBEDDINGS = Gauge(
+    "repo_search_retrieval_index_missing_embeddings",
+    "Publications missing stored embeddings.",
+    ["service"],
+)
+RETRIEVAL_EMBEDDING_COVERAGE_RATIO = Gauge(
+    "repo_search_retrieval_embedding_coverage_ratio",
+    "Ratio of publications that have embeddings.",
+    ["service"],
+)
+RETRIEVAL_HARVEST_RECORDS_TOTAL = Counter(
+    "repo_search_retrieval_harvest_records_total",
+    "Harvested records processed by repository and final status.",
+    ["service", "repository", "status"],
+)
+RETRIEVAL_MODEL_INFO = Gauge(
+    "repo_search_retrieval_model_info",
+    "Static model and retrieval configuration exposed as labels with value 1.",
+    ["service", "component", "name", "value"],
 )
 
 
@@ -206,6 +299,26 @@ def trace_span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[
         yield span
 
 
+def current_trace_ids() -> dict[str, str | None]:
+    if not _TRACING_READY:
+        return {"trace_id": None, "span_id": None}
+
+    from opentelemetry import trace
+
+    context = trace.get_current_span().get_span_context()
+    if not context.is_valid:
+        return {"trace_id": None, "span_id": None}
+
+    return {
+        "trace_id": format(context.trace_id, "032x"),
+        "span_id": format(context.span_id, "016x"),
+    }
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 @contextmanager
 def observe_search_request(service_name: str) -> Iterator[Any]:
     with trace_span("search.request", {"repo_search.service": service_name}) as span:
@@ -224,6 +337,17 @@ def observe_query_parse(service_name: str, parser: str) -> Iterator[Any]:
 def observe_embedding(service_name: str, kind: str) -> Iterator[Any]:
     with trace_span("embedding.generate", {"repo_search.service": service_name, "repo_search.embedding.kind": kind}) as span:
         with EMBEDDING_DURATION_SECONDS.labels(service_name, kind).time():
+            yield span
+
+
+@contextmanager
+def observe_retrieval_stage(service_name: str, stage: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
+    span_attributes = {"repo_search.service": service_name, "repo_search.retrieval.stage": stage}
+    if attributes:
+        span_attributes.update(attributes)
+
+    with trace_span(f"retrieval.{stage}", span_attributes) as span:
+        with RETRIEVAL_STAGE_DURATION_SECONDS.labels(service_name, stage).time():
             yield span
 
 
@@ -247,6 +371,91 @@ def record_job_event(service_name: str, job_type: str, status: str) -> None:
 
 def record_job_duration(service_name: str, job_type: str, status: str, duration_seconds: float) -> None:
     JOB_DURATION_SECONDS.labels(service_name, job_type, status).observe(duration_seconds)
+
+
+def _result_bucket(result_count: int) -> str:
+    if result_count <= 0:
+        return "0"
+    if result_count == 1:
+        return "1"
+    if result_count <= 5:
+        return "2-5"
+    if result_count <= 10:
+        return "6-10"
+    return "11+"
+
+
+def normalize_parser_mode(parser_mode: str | None, used_fallback: bool = False) -> str:
+    if parser_mode:
+        normalized = parser_mode.strip().lower().replace("-", "_")
+        if normalized in {"llm", "llm_repaired", "fallback", "fallback_service_error"}:
+            return normalized
+    return "fallback" if used_fallback else "llm"
+
+
+def record_retrieval_parser_event(service_name: str, parser_mode: str) -> None:
+    RETRIEVAL_PARSER_EVENTS_TOTAL.labels(service_name, normalize_parser_mode(parser_mode)).inc()
+
+
+def record_retrieval_search(
+    service_name: str,
+    parser_mode: str,
+    embedding_query_count: int,
+    vector_candidate_count: int,
+    result_scores: list[float],
+) -> None:
+    result_count = len(result_scores)
+    normalized_parser_mode = normalize_parser_mode(parser_mode)
+    RETRIEVAL_SEARCHES_TOTAL.labels(service_name, normalized_parser_mode, _result_bucket(result_count)).inc()
+    RETRIEVAL_EMBEDDING_QUERY_COUNT.labels(service_name).observe(embedding_query_count)
+    RETRIEVAL_VECTOR_CANDIDATES.labels(service_name).observe(vector_candidate_count)
+    RETRIEVAL_FINAL_RESULTS.labels(service_name).observe(result_count)
+
+    if result_count == 0:
+        RETRIEVAL_ZERO_RESULTS_TOTAL.labels(service_name, normalized_parser_mode).inc()
+        RETRIEVAL_TOP_SCORE.labels(service_name).observe(0)
+        RETRIEVAL_AVERAGE_SCORE.labels(service_name).observe(0)
+        return
+
+    top_score = max(result_scores)
+    average_score = sum(result_scores) / result_count
+    RETRIEVAL_TOP_SCORE.labels(service_name).observe(top_score)
+    RETRIEVAL_AVERAGE_SCORE.labels(service_name).observe(average_score)
+    for score in result_scores:
+        RETRIEVAL_RESULT_SCORE.labels(service_name).observe(score)
+
+
+def set_retrieval_index_stats(
+    service_name: str,
+    total_publications: int,
+    publications_with_embeddings: int,
+    missing_embeddings: int,
+    repositories: list[dict[str, Any]] | None = None,
+) -> None:
+    RETRIEVAL_INDEX_TOTAL_PUBLICATIONS.labels(service_name).set(total_publications)
+    RETRIEVAL_INDEX_WITH_EMBEDDINGS.labels(service_name).set(publications_with_embeddings)
+    RETRIEVAL_INDEX_MISSING_EMBEDDINGS.labels(service_name).set(missing_embeddings)
+    coverage = publications_with_embeddings / total_publications if total_publications else 0
+    RETRIEVAL_EMBEDDING_COVERAGE_RATIO.labels(service_name).set(coverage)
+
+    if repositories is None:
+        return
+
+    for repository in repositories:
+        repository_name = str(repository.get("repository") or "unknown")
+        count = int(repository.get("publications") or 0)
+        RETRIEVAL_INDEX_PUBLICATIONS.labels(service_name, repository_name).set(count)
+
+
+def record_harvest_records(service_name: str, repository: str | None, status: str, records: int) -> None:
+    RETRIEVAL_HARVEST_RECORDS_TOTAL.labels(service_name, repository or "unknown", status).inc(max(records, 0))
+
+
+def set_retrieval_model_info(service_name: str, component: str, values: dict[str, Any]) -> None:
+    for name, value in values.items():
+        if value is None:
+            continue
+        RETRIEVAL_MODEL_INFO.labels(service_name, component, str(name), str(value)).set(1)
 
 
 def set_job_queue_depth(service_name: str, job_type: str, depth: int) -> None:

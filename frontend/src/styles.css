@@ -630,6 +630,207 @@ input:focus {
   min-width: 112px;
 }
 
+.window-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.window-switch button {
+  min-width: 44px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475467;
+  font-weight: 800;
+}
+
+.window-switch button.active {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.model-card-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-card,
+.model-panel {
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.model-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 86px;
+  padding: 14px;
+}
+
+.model-card svg,
+.model-panel-header svg {
+  color: #0f766e;
+  flex: 0 0 auto;
+}
+
+.model-card span {
+  display: block;
+  color: #667085;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.model-card strong {
+  display: block;
+  color: #111827;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.model-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.model-grid.two-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.model-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.model-definition-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.model-definition-list.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.model-definition-list div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-definition-list dt {
+  color: #667085;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.model-definition-list dd {
+  margin: 0;
+  color: #111827;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.metric-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.metric-bar-row {
+  display: grid;
+  grid-template-columns: 150px minmax(120px, 1fr) 78px;
+  gap: 10px;
+  align-items: center;
+}
+
+.metric-bar-row span,
+.metric-bar-row strong {
+  color: #344054;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.metric-bar-row strong {
+  text-align: right;
+}
+
+.metric-bar-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #ecfdf3;
+  overflow: hidden;
+}
+
+.metric-bar-track div {
+  height: 100%;
+  border-radius: inherit;
+  background: #0f766e;
+}
+
+.model-muted {
+  color: #667085;
+  font-weight: 800;
+}
+
+.index-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.index-summary span {
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #344054;
+  padding: 6px 10px;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.model-table-wrap {
+  overflow-x: auto;
+}
+
+.model-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 620px;
+}
+
+.model-table th,
+.model-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #e7ebf0;
+  color: #344054;
+  text-align: left;
+}
+
+.model-table th {
+  color: #667085;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.model-table td {
+  font-weight: 700;
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -642,6 +843,8 @@ input:focus {
 
 @media (max-width: 980px) {
   .overview,
+  .model-card-grid,
+  .model-grid.two-columns,
   .workspace {
     grid-template-columns: 1fr 1fr;
   }
@@ -667,15 +870,33 @@ input:focus {
   .topbar,
   .topbar-actions,
   .results-header,
-  .query-plan,
-  .admin-header,
-  .admin-repository {
+    .query-plan,
+    .admin-header,
+    .admin-repository,
+    .metric-bar-row {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .overview {
     grid-template-columns: 1fr;
+  }
+
+  .model-card-grid,
+  .model-grid.two-columns,
+  .model-definition-list,
+  .model-definition-list.compact {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-bar-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .metric-bar-row strong {
+    text-align: left;
   }
 
   .controls {
