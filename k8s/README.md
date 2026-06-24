@@ -110,6 +110,8 @@ GPU deploy:
 kubectl apply -k k8s-gpu/
 ```
 
+GPU overlay dodeljuje `nvidia.com/gpu` resurs za `embedding-service` i uključuje NVIDIA runtime za `ollama`.
+
 Ako su image-i rebuildovani sa istim `:latest` tagovima, restartovati deployment-e:
 
 ```powershell
@@ -158,7 +160,7 @@ kubectl -n repo-search get pods
 
 Prvo pokretanje može trajati duže jer Kubernetes pravi novi node, povlači bazne image-e,
 pokreće storage, pravi Postgres volume-e i učitava modele. Backend image je velik zbog
-Python/CUDA zavisnosti, a `ollama pull llama3.1:8b` dodatno preuzima nekoliko GB podataka.
+Python/CUDA zavisnosti, a `ollama pull gemma4:12b` dodatno preuzima nekoliko GB podataka.
 
 ## 5. Ollama model
 
@@ -171,7 +173,26 @@ kubectl -n repo-search exec deployment/ollama -- ollama list
 Povući model ako nije već prisutan:
 
 ```powershell
-kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama pull gemma4:12b
+```
+
+Zagrejati model pre prve pretrage:
+
+```powershell
+kubectl -n repo-search exec deployment/ollama -- ollama run gemma4:12b "Return only: ok"
+kubectl -n repo-search rollout restart deployment/query-service
+kubectl -n repo-search rollout status deployment/query-service --timeout=300s
+```
+
+`query-service` radi LLM warm-up na startup-u kada je `LLM_WARMUP_ENABLED=1`.
+
+Ako Ollama vrati da model zahteva noviju verziju, primeniti manifest i restartovati Ollama pod da Kubernetes povuce novi `ollama/ollama:latest` image:
+
+```powershell
+kubectl apply -k k8s-gpu/
+kubectl -n repo-search rollout restart deployment/ollama
+kubectl -n repo-search rollout status deployment/ollama --timeout=300s
+kubectl -n repo-search exec deployment/ollama -- ollama --version
 ```
 
 ## 6. Otvaranje aplikacije
@@ -349,7 +370,7 @@ Ako search/query ne radi zbog Ollama modela:
 
 ```powershell
 kubectl -n repo-search exec deployment/ollama -- ollama list
-kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama pull gemma4:12b
 ```
 
 Ako GPU nije vidljiv:

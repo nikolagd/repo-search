@@ -22,8 +22,9 @@ data:
   PROMETHEUS_URL: http://prometheus:9090
   LLM_PROVIDER: ollama
   LLM_URL: http://ollama:11434/api/generate
-  LLM_MODEL: llama3.1:8b
-  LLM_TIMEOUT: "60"
+  LLM_MODEL: gemma4:12b
+  LLM_TIMEOUT: "180"
+  LLM_WARMUP_ENABLED: "1"
   WORKER_POLL_INTERVAL_SECONDS: "5"
   METRICS_PORT: "9100"
   OTEL_TRACING_ENABLED: "true"

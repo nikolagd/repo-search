@@ -6,9 +6,10 @@ from microservices.common.http import observed_sync_request
 from microservices.common.observability import trace_span
 
 LLM_URL = os.getenv("LLM_URL", "http://localhost:11434/api/generate")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))
+LLM_MODEL = os.getenv("LLM_MODEL", "gemma4:12b")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "180"))
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+LLM_WARMUP_ENABLED = os.getenv("LLM_WARMUP_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def parse_json_response(text: str) -> dict | None:
@@ -72,6 +73,46 @@ def call_llm_json(prompt: str) -> dict | None:
     if LLM_PROVIDER in {"openai", "openai_compatible", "llama_cpp", "llamacpp"}:
         return call_openai_compatible_json(prompt)
     return call_ollama_json(prompt)
+
+
+def warm_up_llm() -> None:
+    if not LLM_WARMUP_ENABLED:
+        emit_app_event(
+            "query.llm_warmup_skipped",
+            "query-service",
+            provider=LLM_PROVIDER,
+            model=LLM_MODEL,
+            reason="disabled",
+        )
+        return
+
+    if LLM_PROVIDER != "ollama":
+        emit_app_event(
+            "query.llm_warmup_skipped",
+            "query-service",
+            provider=LLM_PROVIDER,
+            model=LLM_MODEL,
+            reason="provider_not_ollama",
+        )
+        return
+
+    try:
+        plan = call_ollama_json('Return exactly this JSON object: {"ok": true}')
+        emit_app_event(
+            "query.llm_warmup_completed",
+            "query-service",
+            provider=LLM_PROVIDER,
+            model=LLM_MODEL,
+            returned_json=plan is not None,
+        )
+    except Exception as exc:
+        emit_app_event(
+            "query.llm_warmup_failed",
+            "query-service",
+            provider=LLM_PROVIDER,
+            model=LLM_MODEL,
+            error=str(exc),
+        )
 
 
 def parse_query_llm(query: str) -> dict | None:

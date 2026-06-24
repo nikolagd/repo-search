@@ -164,8 +164,9 @@ services:
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       LLM_URL: ${LLM_URL:-http://ollama:11434/api/generate}
-      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
-      LLM_TIMEOUT: ${LLM_TIMEOUT:-60}
+      LLM_MODEL: ${LLM_MODEL:-gemma4:12b}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+      LLM_WARMUP_ENABLED: ${LLM_WARMUP_ENABLED:-1}
     depends_on:
       ollama:
         condition: service_healthy

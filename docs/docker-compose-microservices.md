@@ -52,8 +52,17 @@ docker compose --env-file .env.microservices -f docker-compose.microservices.yml
 Model treba povući jednom nakon prvog pokretanja:
 
 ```powershell
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull gemma4:12b
 ```
+
+Zagrejati model pre prve pretrage:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama run gemma4:12b "Return only: ok"
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml up -d query-service
+```
+
+`query-service` radi LLM warm-up na startup-u kada je `LLM_WARMUP_ENABLED=1`.
 
 Proveriti modele:
 
@@ -153,7 +162,7 @@ Ako query/search ne radi zbog Ollama modela, proveriti i povući model:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama list
-docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull llama3.1:8b
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec ollama ollama pull gemma4:12b
 ```
 
 Ako embedding radi sporo, proveriti GPU:

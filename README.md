@@ -130,6 +130,8 @@ GPU deploy:
 kubectl apply -k k8s-gpu/
 ```
 
+GPU overlay dodeljuje `nvidia.com/gpu` resurs za `embedding-service` i uključuje NVIDIA runtime za `ollama`.
+
 Sačekati rollout:
 
 ```powershell
@@ -187,7 +189,26 @@ kubectl -n repo-search exec deployment/ollama -- ollama list
 Povući model ako nije već prisutan:
 
 ```powershell
-kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama pull gemma4:12b
+```
+
+Zagrejati model pre prve pretrage:
+
+```powershell
+kubectl -n repo-search exec deployment/ollama -- ollama run gemma4:12b "Return only: ok"
+kubectl -n repo-search rollout restart deployment/query-service
+kubectl -n repo-search rollout status deployment/query-service --timeout=300s
+```
+
+`query-service` radi LLM warm-up na startup-u kada je `LLM_WARMUP_ENABLED=1`.
+
+Ako Ollama vrati da model zahteva noviju verziju, primeniti manifest i restartovati Ollama pod da Kubernetes povuce novi `ollama/ollama:latest` image:
+
+```powershell
+kubectl apply -k k8s-gpu/
+kubectl -n repo-search rollout restart deployment/ollama
+kubectl -n repo-search rollout status deployment/ollama --timeout=300s
+kubectl -n repo-search exec deployment/ollama -- ollama --version
 ```
 
 ## 7. Otvaranje aplikacije
@@ -407,7 +428,7 @@ Ako search/query ne radi zbog Ollama modela:
 
 ```powershell
 kubectl -n repo-search exec deployment/ollama -- ollama list
-kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama pull gemma4:12b
 ```
 
 Ako GPU nije vidljiv:

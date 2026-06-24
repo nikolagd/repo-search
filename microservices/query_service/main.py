@@ -10,7 +10,7 @@ from microservices.common.observability import (
 )
 from microservices.common.schemas import HealthResponse
 from microservices.common.security import require_api_token
-from microservices.query_service.llm_parser import LLM_MODEL, LLM_PROVIDER, LLM_TIMEOUT, LLM_URL
+from microservices.query_service.llm_parser import LLM_MODEL, LLM_PROVIDER, LLM_TIMEOUT, LLM_URL, LLM_WARMUP_ENABLED, warm_up_llm
 from microservices.query_service.query_handler import parse_query
 
 app = FastAPI(title="Repo Search Query Service", version="0.1.0")
@@ -23,6 +23,7 @@ class QueryParseRequest(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    warm_up_llm()
     set_retrieval_model_info(
         "query-service",
         "query_parser",
@@ -30,6 +31,7 @@ def startup() -> None:
             "llm_provider": LLM_PROVIDER,
             "llm_model": LLM_MODEL,
             "llm_timeout_seconds": LLM_TIMEOUT,
+            "llm_warmup_enabled": LLM_WARMUP_ENABLED,
         },
     )
 
@@ -46,6 +48,7 @@ def model_status() -> dict:
         "llm_model": LLM_MODEL,
         "llm_url": LLM_URL,
         "llm_timeout_seconds": LLM_TIMEOUT,
+        "llm_warmup_enabled": LLM_WARMUP_ENABLED,
     }
 
 
