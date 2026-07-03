@@ -69,6 +69,7 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
         "ranking_phrases": clean_string_list(raw.get("ranking_phrases")),
         "interpreted_query": interpreted_query.strip(),
         "used_fallback": False,
+        "parser_mode": "llm",
     }
     return apply_explicit_year_constraints(plan, original_query), None
 
@@ -83,6 +84,7 @@ def parse_query(query: str) -> dict:
         repaired_plan = repair_query_plan(query, raw_plan, reason or "Invalid query plan.")
         plan, _ = normalize_plan(repaired_plan, query)
         if plan is not None:
+            plan["parser_mode"] = "llm_repaired"
             return plan
 
     return parse_query_fallback(query)

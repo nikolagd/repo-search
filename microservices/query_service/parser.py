@@ -98,4 +98,5 @@ def parse_query_fallback(query: str) -> dict:
         "ranking_phrases": [],
         "interpreted_query": f"LLM parsing was unavailable, so I searched using: {semantic_query}",
         "used_fallback": True,
+        "parser_mode": "fallback",
     }

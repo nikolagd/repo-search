@@ -3,5 +3,8 @@ kind: Kustomization
 resources:
   - ../k8s
   - runtimeclass-nvidia.yaml
+  - dcgm-exporter.yaml
 patches:
   - path: embedding-service-gpu-patch.yaml
+  - path: ollama-gpu-patch.yaml
+  - path: prometheus-dcgm-patch.yaml

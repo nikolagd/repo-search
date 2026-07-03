@@ -6,4 +6,5 @@ resources:
   - 02-database.yaml
   - 03-services.yaml
   - 04-frontend-ollama.yaml
-
+  - 05-observability.yaml
+  - 06-tracing.yaml

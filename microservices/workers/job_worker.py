@@ -7,10 +7,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import requests
-
+from microservices.common.app_logging import emit_app_event
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
+from microservices.common.http import observed_sync_request
+from microservices.common.observability import (
+    record_harvest_records,
+    record_job_duration,
+    record_job_event,
+    start_worker_observability,
+    trace_span,
+)
 from microservices.common.security import internal_headers
 from microservices.workers.oai_client import OAINoRecordsMatch, choose_metadata_prefix, fetch_page, get_granularity
 from microservices.workers.parser import parse_oai_xml
@@ -21,12 +28,13 @@ EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-s
 SEARCH_SERVICE_URL = service_url("SEARCH_SERVICE_URL", "http://search-service:8000")
 POLL_INTERVAL_SECONDS = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
 OUTPUT_DIR = Path(os.getenv("HARVEST_OUTPUT_DIR", "/app/data"))
+SERVICE_NAME = "job-worker"
 
 
 def request_json(method: str, url: str, **kwargs) -> Any:
     headers = kwargs.pop("headers", {})
     headers.update(internal_headers())
-    response = requests.request(method, url, headers=headers, timeout=120, **kwargs)
+    response = observed_sync_request(method, url, service_name=SERVICE_NAME, headers=headers, timeout=120, **kwargs)
     response.raise_for_status()
     return response.json() if response.content else None
 
@@ -39,6 +47,7 @@ def claim_next_job() -> dict[str, Any] | None:
                 """
                 UPDATE admin_job
                 SET status = 'running',
+                    started_at = NOW(),
                     message = 'Job started.',
                     updated_at = NOW()
                 WHERE id = (
@@ -89,20 +98,27 @@ def finish_job(job_id: int, status: str, processed_records: int | None, message:
 
 
 def sync_publication_to_search(publication: dict[str, Any]) -> None:
-    embedding = request_json(
-        "POST",
-        f"{EMBEDDING_SERVICE_URL}/embed/document",
-        json={
-            "title": publication.get("title"),
-            "abstract": publication.get("abstract"),
+    with trace_span(
+        "job.sync_publication_embedding",
+        {
+            "repo_search.publication.id": publication.get("id"),
+            "repo_search.repository.id": publication.get("repository_id"),
         },
-    )["embedding"]
+    ):
+        embedding = request_json(
+            "POST",
+            f"{EMBEDDING_SERVICE_URL}/embed/document",
+            json={
+                "title": publication.get("title"),
+                "abstract": publication.get("abstract"),
+            },
+        )["embedding"]
 
-    request_json(
-        "POST",
-        f"{SEARCH_SERVICE_URL}/publications/{publication['id']}/embedding",
-        json={"embedding": embedding},
-    )
+        request_json(
+            "POST",
+            f"{SEARCH_SERVICE_URL}/publications/{publication['id']}/embedding",
+            json={"embedding": embedding},
+        )
 
 
 def harvest_repository(job: dict[str, Any]) -> int:
@@ -119,100 +135,170 @@ def harvest_repository(job: dict[str, Any]) -> int:
     metadata_prefix = choose_metadata_prefix(base_url=base_url)
     from_date = format_oai_from_date(datetime.fromisoformat(last_harvest), granularity) if last_harvest else None
 
-    try:
-        xml_text = fetch_page(
-            from_date=from_date,
-            metadata_prefix=metadata_prefix,
-            base_url=base_url,
-        )
-    except OAINoRecordsMatch:
-        request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
-        return 0
-
-    while True:
-        output_file = OUTPUT_DIR / f"repo_{repository_id}_page_{page_num}.xml"
-        output_file.write_text(xml_text, encoding="utf-8")
-
-        records, token = parse_oai_xml(xml_text, metadata_prefix)
-
-        for record in records:
-            publication_id = request_json(
-                "POST",
-                f"{CATALOG_SERVICE_URL}/publications",
-                json={
-                    "repository_id": repository_id,
-                    "oai_identifier": record["oai_identifier"],
-                    "title": record["title"],
-                    "abstract": record["abstract"],
-                    "date": record["date"],
-                    "source_url": record["source_url"],
-                    "authors": record["authors"],
-                },
-            )["id"]
-            sync_publication_to_search(
-                {
-                    "id": publication_id,
-                    "repository_id": repository_id,
-                    "repository_name": repository["name"],
-                    "title": record["title"],
-                    "abstract": record["abstract"],
-                    "source_url": record["source_url"],
-                    "date": record["date"],
-                    "oai_identifier": record["oai_identifier"],
-                    "authors": record["authors"],
-                }
+    with trace_span(
+        "job.harvest_repository",
+        {
+            "repo_search.job.id": job["id"],
+            "repo_search.repository.id": repository_id,
+            "repo_search.oai.metadata_prefix": metadata_prefix,
+        },
+    ) as span:
+        try:
+            xml_text = fetch_page(
+                from_date=from_date,
+                metadata_prefix=metadata_prefix,
+                base_url=base_url,
             )
-            total_processed += 1
+        except OAINoRecordsMatch:
+            request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
+            if span is not None:
+                span.set_attribute("repo_search.records_processed", 0)
+            return 0
 
-        if not token:
-            break
+        while True:
+            output_file = OUTPUT_DIR / f"repo_{repository_id}_page_{page_num}.xml"
+            output_file.write_text(xml_text, encoding="utf-8")
 
-        xml_text = fetch_page(token, base_url=base_url)
-        page_num += 1
+            records, token = parse_oai_xml(xml_text, metadata_prefix)
+
+            for record in records:
+                publication_id = request_json(
+                    "POST",
+                    f"{CATALOG_SERVICE_URL}/publications",
+                    json={
+                        "repository_id": repository_id,
+                        "oai_identifier": record["oai_identifier"],
+                        "title": record["title"],
+                        "abstract": record["abstract"],
+                        "date": record["date"],
+                        "source_url": record["source_url"],
+                        "authors": record["authors"],
+                    },
+                )["id"]
+                sync_publication_to_search(
+                    {
+                        "id": publication_id,
+                        "repository_id": repository_id,
+                        "repository_name": repository["name"],
+                        "title": record["title"],
+                        "abstract": record["abstract"],
+                        "source_url": record["source_url"],
+                        "date": record["date"],
+                        "oai_identifier": record["oai_identifier"],
+                        "authors": record["authors"],
+                    }
+                )
+                total_processed += 1
+
+            if not token:
+                break
+
+            xml_text = fetch_page(token, base_url=base_url)
+            page_num += 1
+
+        if span is not None:
+            span.set_attribute("repo_search.records_processed", total_processed)
+            span.set_attribute("repo_search.oai.pages", page_num)
 
     request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
+    record_harvest_records(SERVICE_NAME, repository.get("name"), "succeeded", total_processed)
     return total_processed
 
 
 def backfill_embeddings() -> int:
-    publications = request_json("GET", f"{CATALOG_SERVICE_URL}/publications")
-    processed = 0
+    with trace_span("job.backfill_embeddings") as span:
+        publications = request_json("GET", f"{CATALOG_SERVICE_URL}/publications")
+        processed = 0
 
-    for publication in publications:
-        sync_publication_to_search(publication)
-        processed += 1
+        for publication in publications:
+            sync_publication_to_search(publication)
+            processed += 1
 
-    return processed
+        if span is not None:
+            span.set_attribute("repo_search.records_processed", processed)
+        return processed
 
 
 def run_job(job: dict[str, Any]) -> None:
-    try:
-        if job["job_type"] == "repository_harvest":
-            processed = harvest_repository(job)
-            finish_job(
-                job["id"],
-                "succeeded",
-                processed,
-                f"Harvest completed. Processed records: {processed}.",
-            )
-            return
+    started_at = time.perf_counter()
+    status = "failed"
+    record_job_event(SERVICE_NAME, job["job_type"], "started")
+    with trace_span(
+        "job.run",
+        {
+            "repo_search.job.id": job["id"],
+            "repo_search.job.type": job["job_type"],
+            "repo_search.repository.id": job.get("repository_id"),
+        },
+    ) as span:
+        try:
+            if job["job_type"] == "repository_harvest":
+                processed = harvest_repository(job)
+                finish_job(
+                    job["id"],
+                    "succeeded",
+                    processed,
+                    f"Harvest completed. Processed records: {processed}.",
+                )
+                if span is not None:
+                    span.set_attribute("repo_search.records_processed", processed)
+                emit_app_event(
+                    "job.harvest_completed",
+                    SERVICE_NAME,
+                    job_id=job["id"],
+                    repository_id=job.get("repository_id"),
+                    processed_records=processed,
+                    status="succeeded",
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                )
+                status = "succeeded"
+                return
 
-        if job["job_type"] == "embedding_backfill":
-            processed = backfill_embeddings()
-            finish_job(
-                job["id"],
-                "succeeded",
-                processed,
-                f"Embedding backfill completed. Embedded records: {processed}.",
-            )
-            return
+            if job["job_type"] == "embedding_backfill":
+                processed = backfill_embeddings()
+                finish_job(
+                    job["id"],
+                    "succeeded",
+                    processed,
+                    f"Embedding backfill completed. Embedded records: {processed}.",
+                )
+                if span is not None:
+                    span.set_attribute("repo_search.records_processed", processed)
+                emit_app_event(
+                    "job.embedding_backfill_completed",
+                    SERVICE_NAME,
+                    job_id=job["id"],
+                    processed_records=processed,
+                    status="succeeded",
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                )
+                status = "succeeded"
+                return
 
-        finish_job(job["id"], "failed", None, f"Unsupported job type: {job['job_type']}")
-    except Exception as exc:
-        finish_job(job["id"], "failed", None, f"Job failed: {exc}")
+            finish_job(job["id"], "failed", None, f"Unsupported job type: {job['job_type']}")
+        except Exception as exc:
+            if span is not None:
+                span.set_attribute("repo_search.job.error", str(exc))
+            emit_app_event(
+                "job.failed",
+                SERVICE_NAME,
+                job_id=job["id"],
+                job_type=job["job_type"],
+                repository_id=job.get("repository_id"),
+                status="failed",
+                error=str(exc),
+                duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+            )
+            finish_job(job["id"], "failed", None, f"Job failed: {exc}")
+        finally:
+            if span is not None:
+                span.set_attribute("repo_search.job.status", status)
+            record_job_event(SERVICE_NAME, job["job_type"], status)
+            record_job_duration(SERVICE_NAME, job["job_type"], status, time.perf_counter() - started_at)
 
 
 def main() -> None:
+    start_worker_observability(SERVICE_NAME)
     while True:
         try:
             job = claim_next_job()

@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: repo-search
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: ollama
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility

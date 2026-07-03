@@ -110,6 +110,8 @@ GPU deploy:
 kubectl apply -k k8s-gpu/
 ```
 
+GPU overlay dodeljuje `nvidia.com/gpu` resurs za `embedding-service` i uključuje NVIDIA runtime za `ollama`.
+
 Ako su image-i rebuildovani sa istim `:latest` tagovima, restartovati deployment-e:
 
 ```powershell
@@ -140,6 +142,14 @@ kubectl -n repo-search rollout status deployment/gateway --timeout=300s
 kubectl -n repo-search rollout status deployment/frontend --timeout=300s
 kubectl -n repo-search rollout status deployment/ollama --timeout=300s
 kubectl -n repo-search rollout status deployment/job-worker --timeout=300s
+kubectl -n repo-search rollout status deployment/prometheus --timeout=180s
+kubectl -n repo-search rollout status deployment/grafana --timeout=180s
+kubectl -n repo-search rollout status deployment/postgres-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/kube-state-metrics --timeout=180s
+kubectl -n repo-search rollout status daemonset/node-exporter --timeout=180s
+kubectl -n repo-search rollout status deployment/otel-collector --timeout=180s
+kubectl -n repo-search rollout status deployment/jaeger --timeout=180s
+kubectl -n repo-search rollout status daemonset/dcgm-exporter --timeout=180s
 ```
 
 Proveriti podove:
@@ -150,7 +160,7 @@ kubectl -n repo-search get pods
 
 Prvo pokretanje može trajati duže jer Kubernetes pravi novi node, povlači bazne image-e,
 pokreće storage, pravi Postgres volume-e i učitava modele. Backend image je velik zbog
-Python/CUDA zavisnosti, a `ollama pull llama3.1:8b` dodatno preuzima nekoliko GB podataka.
+Python/CUDA zavisnosti, a `ollama pull gemma4:12b` dodatno preuzima nekoliko GB podataka.
 
 ## 5. Ollama model
 
@@ -163,7 +173,26 @@ kubectl -n repo-search exec deployment/ollama -- ollama list
 Povući model ako nije već prisutan:
 
 ```powershell
-kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama pull gemma4:12b
+```
+
+Zagrejati model pre prve pretrage:
+
+```powershell
+kubectl -n repo-search exec deployment/ollama -- ollama run gemma4:12b "Return only: ok"
+kubectl -n repo-search rollout restart deployment/query-service
+kubectl -n repo-search rollout status deployment/query-service --timeout=300s
+```
+
+`query-service` radi LLM warm-up na startup-u kada je `LLM_WARMUP_ENABLED=1`.
+
+Ako Ollama vrati da model zahteva noviju verziju, primeniti manifest i restartovati Ollama pod da Kubernetes povuce novi `ollama/ollama:latest` image:
+
+```powershell
+kubectl apply -k k8s-gpu/
+kubectl -n repo-search rollout restart deployment/ollama
+kubectl -n repo-search rollout status deployment/ollama --timeout=300s
+kubectl -n repo-search exec deployment/ollama -- ollama --version
 ```
 
 ## 6. Otvaranje aplikacije
@@ -226,7 +255,80 @@ Provera GPU-a u embedding podu:
 kubectl -n repo-search exec deployment/embedding-service -- python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
 
-## 8. Osnovni troubleshooting
+## 8. Observability i metrics-server
+
+`metrics-server` je potreban za Kubernetes CPU/memory metrike, `kubectl top` i kasnije HPA pravila.
+On ne skuplja aplikacione metrike kao sto su request latency, error rate, route throughput ili
+service-to-service latency. Za to se koristi Prometheus scrape `/metrics` endpoint-a i Grafana.
+
+U Minikube-u ukljuciti metrics-server:
+
+```powershell
+minikube addons enable metrics-server -p repo-search
+kubectl top pods -n repo-search
+kubectl top nodes
+```
+
+Ako `kubectl top` ne vraca podatke odmah, sacekati da se metrics-server rollout zavrsi:
+
+```powershell
+kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
+kubectl get apiservice v1beta1.metrics.k8s.io
+```
+
+Aplikacioni `/metrics` endpoint-i postoje na backend servisima:
+
+```text
+http://gateway:8000/metrics
+http://auth-service:8000/metrics
+http://catalog-service:8000/metrics
+http://search-service:8000/metrics
+http://query-service:8000/metrics
+http://embedding-service:8000/metrics
+http://job-service:8000/metrics
+```
+
+Prometheus, Grafana, Postgres exporter, kube-state-metrics i node-exporter su deo `k8s/05-observability.yaml` i primenjuju se kroz:
+
+```powershell
+kubectl apply -k k8s/
+```
+
+GPU overlay `k8s-gpu/` dodaje DCGM exporter za NVIDIA GPU metrike:
+
+```powershell
+kubectl apply -k k8s-gpu/
+```
+
+Otvaranje Prometheus-a:
+
+```powershell
+kubectl -n repo-search port-forward service/prometheus 9090:9090
+```
+
+Otvaranje Grafana-e:
+
+```powershell
+kubectl -n repo-search port-forward service/grafana 3000:3000
+```
+
+OpenTelemetry Collector i Jaeger su deo `k8s/06-tracing.yaml`. OpenTelemetry šalje trace podatke iz Python servisa ka collector-u, a collector ih prosleđuje u Jaeger.
+
+Otvaranje Jaeger UI-a:
+
+```powershell
+kubectl -n repo-search port-forward service/jaeger 16686:16686
+```
+
+Zatim otvoriti:
+
+```text
+http://localhost:16686
+```
+
+U Jaeger-u se vidi jedan konkretan request ili job kroz servise, na primer `gateway -> search-service -> query-service -> embedding-service`.
+
+## 9. Osnovni troubleshooting
 
 Ako podovi nisu spremni:
 
@@ -268,7 +370,7 @@ Ako search/query ne radi zbog Ollama modela:
 
 ```powershell
 kubectl -n repo-search exec deployment/ollama -- ollama list
-kubectl -n repo-search exec deployment/ollama -- ollama pull llama3.1:8b
+kubectl -n repo-search exec deployment/ollama -- ollama pull gemma4:12b
 ```
 
 Ako GPU nije vidljiv:
@@ -292,7 +394,7 @@ kubectl -n repo-search rollout restart deployment/catalog-service
 kubectl -n repo-search rollout restart deployment/job-worker
 ```
 
-## 9. Zaustavljanje
+## 10. Zaustavljanje
 
 Zaustaviti Minikube klaster bez brisanja podataka:
 
@@ -311,9 +413,9 @@ kubectl config use-context repo-search
 kubectl -n repo-search get pods
 ```
 
-Ako koristiš Docker Compose umesto Kubernetes-a, zaustavljanje je u glavnom README fajlu.
+Ako koristiš Docker Compose umesto Kubernetes-a, arhivirano uputstvo je u `docs/docker-compose-microservices.md`.
 
-## 10. Brisanje
+## 11. Brisanje
 
 Obrisati aplikaciju i lokalne Kubernetes podatke:
 

@@ -7,10 +7,12 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel
 
 from microservices.common.db import get_connection
+from microservices.common.observability import setup_observability
 from microservices.common.schemas import HealthResponse, RepositoryResponse, RepositoryWriteRequest, StatsResponse
 from microservices.common.security import require_api_token
 
 app = FastAPI(title="Repo Search Catalog Service", version="0.1.0")
+setup_observability(app, "catalog-service")
 
 
 class PublicationUpsertRequest(BaseModel):

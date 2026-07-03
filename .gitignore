@@ -211,5 +211,7 @@ data/*
 backups/*
 docs/*
 !docs/ci-workflow.md
+!docs/observability.md
+!docs/docker-compose-microservices.md
 frontend/node_modules/
 frontend/dist/

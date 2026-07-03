@@ -7,13 +7,23 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel
 
 from microservices.common.db import get_connection
+from microservices.common.observability import (
+    set_job_oldest_queued_age,
+    set_job_oldest_running_age,
+    set_job_queue_depth,
+    set_jobs_by_status,
+    setup_observability,
+)
 from microservices.common.schemas import HealthResponse
 from microservices.common.security import require_api_token
 
 app = FastAPI(title="Repo Search Job Service", version="0.1.0")
+setup_observability(app, "job-service")
 
 REPOSITORY_HARVEST_JOB = "repository_harvest"
 EMBEDDING_BACKFILL_JOB = "embedding_backfill"
+JOB_TYPES = (REPOSITORY_HARVEST_JOB, EMBEDDING_BACKFILL_JOB)
+JOB_STATUSES = ("queued", "running", "succeeded", "failed")
 
 
 class HarvestJobRequest(BaseModel):
@@ -42,6 +52,61 @@ def job_from_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
         "processed_records": row[6],
         "message": row[7],
     }
+
+
+def refresh_job_metrics() -> None:
+    try:
+        conn = get_connection()
+    except Exception:
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT job_type, status, COUNT(*)
+                FROM admin_job
+                GROUP BY job_type, status
+                """
+            )
+            status_counts = {(job_type, status): count for job_type, status, count in cur.fetchall()}
+
+            cur.execute(
+                """
+                SELECT job_type, EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))
+                FROM admin_job
+                WHERE status = 'queued'
+                GROUP BY job_type
+                """
+            )
+            oldest_queued = dict(cur.fetchall())
+
+            cur.execute(
+                """
+                SELECT job_type, EXTRACT(EPOCH FROM (NOW() - MIN(started_at)))
+                FROM admin_job
+                WHERE status = 'running'
+                GROUP BY job_type
+                """
+            )
+            oldest_running = dict(cur.fetchall())
+    except Exception:
+        return
+    finally:
+        conn.close()
+
+    for job_type in JOB_TYPES:
+        for job_status in JOB_STATUSES:
+            count = int(status_counts.get((job_type, job_status), 0))
+            set_jobs_by_status("job-service", job_type, job_status, count)
+            if job_status == "queued":
+                set_job_queue_depth("job-service", job_type, count)
+
+        set_job_oldest_queued_age("job-service", job_type, float(oldest_queued.get(job_type, 0) or 0))
+        set_job_oldest_running_age("job-service", job_type, float(oldest_running.get(job_type, 0) or 0))
+
+
+app.state.collect_metrics = refresh_job_metrics
 
 
 def ensure_schema() -> None:
@@ -112,6 +177,7 @@ def jobs(
     repository_id: int | None = None,
     include_acknowledged: bool = False,
 ) -> list[dict[str, Any]]:
+    refresh_job_metrics()
     clauses = []
     params: list[Any] = []
 
@@ -178,6 +244,7 @@ def create_job(job_type: str, repository_id: int | None, message: str) -> dict[s
             )
             job = job_from_row(cur.fetchone())
         conn.commit()
+        refresh_job_metrics()
         return job
     except Exception as exc:
         conn.rollback()
@@ -209,6 +276,7 @@ def acknowledge_job(job_id: int) -> dict[str, str]:
             raise HTTPException(status_code=404, detail="Completed job was not found.")
 
         conn.commit()
+        refresh_job_metrics()
         return {"status": "ok"}
     except HTTPException:
         conn.rollback()
