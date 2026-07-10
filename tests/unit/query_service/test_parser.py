@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import pytest
+
+from microservices.query_service.parser import extract_year_constraints, parse_query_fallback
+
+
+@pytest.mark.parametrize(
+    ("query", "clean_query", "year_from", "year_to"),
+    [
+        ("Find papers about AI after 2020", "find papers about ai", 2021, None),
+        ("AI since 2019", "ai", 2019, None),
+        ("AI before 2020", "ai", None, 2019),
+        ("AI until 2020", "ai", None, 2020),
+        ("Radovi o AI nakon 2020", "radovi o ai", 2021, None),
+        ("Radovi o AI od 2019", "radovi o ai", 2019, None),
+        ("Radovi o AI pre 2020", "radovi o ai", None, 2019),
+        ("Radovi o AI do 2020", "radovi o ai", None, 2020),
+    ],
+)
+def test_extract_year_constraints_uses_explicit_temporal_phrases(
+    query: str,
+    clean_query: str,
+    year_from: int | None,
+    year_to: int | None,
+) -> None:
+    assert extract_year_constraints(query) == {
+        "clean_query": clean_query,
+        "year_from": year_from,
+        "year_to": year_to,
+    }
+
+
+def test_fallback_parser_builds_deterministic_plan_without_external_services() -> None:
+    plan = parse_query_fallback("Find papers about graph neural networks after 2020")
+
+    assert plan == {
+        "embedding_queries": ["graph neural networks"],
+        "semantic_query": "graph neural networks",
+        "topic_phrases": [],
+        "year_from": 2021,
+        "year_to": None,
+        "ranking_phrases": [],
+        "interpreted_query": (
+            "LLM parsing was unavailable, so I searched using: graph neural networks"
+        ),
+        "used_fallback": True,
+        "parser_mode": "fallback",
+    }
+
+
+def test_fallback_parser_preserves_original_query_when_only_a_filler_remains() -> None:
+    plan = parse_query_fallback("Find papers about")
+
+    assert plan["embedding_queries"] == ["Find papers about"]
+    assert plan["semantic_query"] == "Find papers about"
+    assert plan["used_fallback"] is True
