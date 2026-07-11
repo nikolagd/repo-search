@@ -51,6 +51,8 @@ def job_from_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
         "finished_at": serialize_datetime(row[5]),
         "processed_records": row[6],
         "message": row[7],
+        "attempt_count": row[8] if len(row) > 8 else 0,
+        "heartbeat_at": serialize_datetime(row[9]) if len(row) > 9 else None,
     }
 
 
@@ -124,6 +126,9 @@ def ensure_schema() -> None:
                     finished_at TIMESTAMP WITHOUT TIME ZONE,
                     processed_records INTEGER,
                     message TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    heartbeat_at TIMESTAMP WITHOUT TIME ZONE,
+                    lease_token TEXT,
                     acknowledged_at TIMESTAMP WITHOUT TIME ZONE,
                     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
@@ -132,6 +137,22 @@ def ensure_schema() -> None:
                     CONSTRAINT chk_admin_job_status
                         CHECK (status IN ('queued', 'running', 'succeeded', 'failed'))
                 );
+
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP WITHOUT TIME ZONE;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS lease_token TEXT;
+
+                UPDATE admin_job
+                SET attempt_count = 0
+                WHERE attempt_count IS NULL;
+
+                ALTER TABLE admin_job
+                    ALTER COLUMN attempt_count SET DEFAULT 0;
+                ALTER TABLE admin_job
+                    ALTER COLUMN attempt_count SET NOT NULL;
 
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_queued_running_repository_harvest
                     ON admin_job (repository_id)
@@ -143,6 +164,10 @@ def ensure_schema() -> None:
 
                 CREATE INDEX IF NOT EXISTS idx_admin_job_recent
                     ON admin_job (job_type, repository_id, started_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_admin_job_stale_running
+                    ON admin_job (heartbeat_at)
+                    WHERE status = 'running';
                 """
             )
         conn.commit()
@@ -194,7 +219,7 @@ def jobs(
 
     sql = """
         SELECT id, job_type, repository_id, status, started_at, finished_at,
-               processed_records, message
+               processed_records, message, attempt_count, heartbeat_at
         FROM admin_job
     """
 
@@ -238,7 +263,7 @@ def create_job(job_type: str, repository_id: int | None, message: str) -> dict[s
                 INSERT INTO admin_job (job_type, repository_id, status, message)
                 VALUES (%s, %s, 'queued', %s)
                 RETURNING id, job_type, repository_id, status, started_at, finished_at,
-                          processed_records, message
+                          processed_records, message, attempt_count, heartbeat_at
                 """,
                 (job_type, repository_id, message),
             )

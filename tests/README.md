@@ -6,7 +6,7 @@ The test suite targets the current implementation under `microservices/`. Unit t
 
 - Python and the runtime packages from `requirements.txt`.
 - Pytest from `requirements-dev.txt`.
-- Docker Desktop only for the pgvector integration test.
+- Docker Desktop only for PostgreSQL/pgvector integration tests.
 - No Minikube, Kubernetes deployment, running application stack, Ollama model, or external API credentials.
 
 From the repository root, install the existing runtime dependencies and the test-only dependency:
@@ -37,9 +37,9 @@ docker compose -f docker-compose.test.yml down --volumes
 Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue
 ```
 
-The integration fixture creates a uniquely named schema and removes it after the test. The Docker service uses container-local temporary storage and does not require the complete application deployment.
+The integration fixtures create uniquely named schemas and remove them after each test. The Docker service uses container-local temporary storage and does not require the complete application deployment. Job reliability tests use PostgreSQL transactions and locks; vector retrieval tests additionally require the `vector` extension.
 
-When `TEST_DATABASE_URL` is not set, cannot be reached, or does not expose the `vector` extension, pgvector integration tests are collected and reported as skipped. A configured database that is reachable but fails during the tested behavior causes a test failure.
+When `TEST_DATABASE_URL` is not set or cannot be reached, PostgreSQL integration tests are collected and reported as skipped. On a reachable PostgreSQL server without the `vector` extension, job reliability tests can run while pgvector retrieval tests are skipped. A configured database that is reachable but fails during the tested behavior causes a test failure.
 
 ## Complete suite
 
@@ -49,4 +49,4 @@ With the isolated database running and `TEST_DATABASE_URL` set as above:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Without PostgreSQL/pgvector, the same command runs all unit tests and reports the pgvector integration tests as skipped.
+Without PostgreSQL/pgvector, the same command runs all unit tests and reports database integration tests as skipped.

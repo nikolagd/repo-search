@@ -57,3 +57,45 @@ def pgvector_connection_factory() -> Iterator[Callable[[], Any]]:
                 cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name)))
         finally:
             cleanup_connection.close()
+
+
+@pytest.fixture
+def postgres_connection_factory() -> Iterator[Callable[[], Any]]:
+    database_url = os.getenv("TEST_DATABASE_URL", "").strip()
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is not set; PostgreSQL integration test was not requested.")
+
+    import psycopg2
+    from psycopg2 import sql
+
+    try:
+        administration_connection = psycopg2.connect(database_url, connect_timeout=3)
+    except psycopg2.OperationalError as exc:
+        message = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+        pytest.skip(f"TEST_DATABASE_URL is unreachable: {message}")
+
+    schema_name = f"repo_search_job_test_{uuid4().hex}"
+    administration_connection.autocommit = True
+    try:
+        with administration_connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+    finally:
+        administration_connection.close()
+
+    def connect() -> Any:
+        return psycopg2.connect(
+            database_url,
+            connect_timeout=3,
+            options=f"-c search_path={schema_name},public",
+        )
+
+    try:
+        yield connect
+    finally:
+        cleanup_connection = psycopg2.connect(database_url, connect_timeout=3)
+        cleanup_connection.autocommit = True
+        try:
+            with cleanup_connection.cursor() as cursor:
+                cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name)))
+        finally:
+            cleanup_connection.close()
