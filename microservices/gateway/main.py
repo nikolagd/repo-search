@@ -328,9 +328,22 @@ async def admin_embeddings(request: Request) -> dict:
     jobs = jobs_response.json()
     catalog_publications = catalog_response.json()["publications"]
     search_status = status_response.json()
-    missing_embeddings = max(catalog_publications - search_status["publications_with_embeddings"], 0)
+    return build_admin_embedding_status(catalog_publications, search_status, jobs)
+
+
+def build_admin_embedding_status(
+    catalog_publications: int,
+    search_status: dict,
+    jobs: list[dict],
+) -> dict:
+    missing_embeddings = search_status.get(
+        "missing_embeddings",
+        max(catalog_publications - search_status["publications_with_embeddings"], 0),
+    )
     return {
+        "current_embeddings": search_status.get("current_embeddings", search_status["publications_with_embeddings"]),
         "missing_embeddings": missing_embeddings,
+        "stale_embeddings": search_status.get("stale_embeddings", 0),
         "embedding_job": jobs[0] if jobs else None,
     }
 

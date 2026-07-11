@@ -182,11 +182,19 @@ def ensure_schema() -> None:
                     source_url TEXT,
                     date TIMESTAMP WITHOUT TIME ZONE,
                     oai_identifier TEXT UNIQUE,
-                    embedding vector(1024)
+                    embedding vector(1024),
+                    embedding_model TEXT,
+                    embedding_dimension INTEGER,
+                    embedding_generated_at TIMESTAMPTZ,
+                    embedding_source_hash TEXT
                 );
 
                 ALTER TABLE publication
-                    ADD COLUMN IF NOT EXISTS embedding vector(1024);
+                    ADD COLUMN IF NOT EXISTS embedding vector(1024),
+                    ADD COLUMN IF NOT EXISTS embedding_model TEXT,
+                    ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER,
+                    ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS embedding_source_hash TEXT;
 
                 CREATE TABLE IF NOT EXISTS publication_author (
                     publication_id INTEGER NOT NULL REFERENCES publication(id) ON DELETE CASCADE,
@@ -338,7 +346,12 @@ def publications() -> list[dict[str, Any]]:
                            ARRAY_AGG(a.full_name ORDER BY a.full_name)
                                FILTER (WHERE a.full_name IS NOT NULL),
                            '{}'
-                       ) AS authors
+                       ) AS authors,
+                       p.embedding IS NOT NULL,
+                       p.embedding_model,
+                       p.embedding_dimension,
+                       p.embedding_generated_at,
+                       p.embedding_source_hash
                 FROM publication p
                 LEFT JOIN repository r ON r.id = p.repository_id
                 LEFT JOIN publication_author pa ON pa.publication_id = p.id
@@ -362,6 +375,11 @@ def publications() -> list[dict[str, Any]]:
             "oai_identifier": row[6],
             "repository_name": row[7],
             "authors": list(row[8] or []),
+            "has_embedding": row[9],
+            "embedding_model": row[10],
+            "embedding_dimension": row[11],
+            "embedding_generated_at": serialize_datetime(row[12]),
+            "embedding_source_hash": row[13],
         }
         for row in rows
     ]
