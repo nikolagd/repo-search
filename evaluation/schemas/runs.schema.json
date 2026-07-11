@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["runs"],
+  "properties": {
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["query_id", "method", "latency_ms", "parser_mode", "results"],
+        "properties": {
+          "query_id": {"type": "string", "minLength": 1},
+          "method": {"type": "string", "minLength": 1},
+          "latency_ms": {"type": ["number", "null"], "minimum": 0},
+          "parser_mode": {"type": ["string", "null"]},
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["rank", "publication_id", "score"],
+              "properties": {
+                "rank": {"type": "integer", "minimum": 1},
+                "publication_id": {"type": "string", "minLength": 1},
+                "score": {"type": "number"},
+                "title": {"type": ["string", "null"]},
+                "abstract": {"type": ["string", "null"]},
+                "source_url": {"type": ["string", "null"]}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["metadata", "aggregate_metrics", "per_query_metrics"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["git_commit", "evaluation_timestamp", "corpus_size", "query_count", "k_values", "embedding_model", "ranking_configuration", "parser_mode_counts"]
+    },
+    "aggregate_metrics": {"type": "array"},
+    "per_query_metrics": {"type": "array"}
+  }
+}
