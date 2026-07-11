@@ -8,9 +8,9 @@ def utc_now_naive():
 
 
 def to_utc(value):
-    if value.tzinfo is not None:
-        return value.astimezone(timezone.utc)
-    return value.astimezone().astimezone(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def format_oai_from_date(last_harvest, granularity):

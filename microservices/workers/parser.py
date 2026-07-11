@@ -1,5 +1,6 @@
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 NS = {
     "oai": "http://www.openarchives.org/OAI/2.0/",
@@ -10,10 +11,11 @@ NS = {
     "mods": "http://www.loc.gov/mods/v3",
 }
 
-DATE_ONLY_PATTERNS = [
-    re.compile(r"^\d{4}-\d{2}-\d{2}$"),
-    re.compile(r"^\d{4}-\d{2}$"),
-    re.compile(r"^\d{4}$"),
+DATE_VALUE_PATTERNS = [
+    (re.compile(r"^\d{4}-\d{2}-\d{2}[T ].+$"), None),
+    (re.compile(r"^\d{4}-\d{2}-\d{2}$"), "%Y-%m-%d"),
+    (re.compile(r"^\d{4}-\d{2}$"), "%Y-%m"),
+    (re.compile(r"^\d{4}$"), "%Y"),
 ]
 
 
@@ -33,12 +35,28 @@ def get_direct_texts_by_name(parent, names):
     return values
 
 
-def pick_date_only(dates):
-    for pattern in DATE_ONLY_PATTERNS:
-        for value in dates:
-            if pattern.match(value):
-                return value
+def pick_valid_date(dates):
+    for pattern, date_format in DATE_VALUE_PATTERNS:
+        for raw_value in dates:
+            value = raw_value.strip()
+            if not pattern.match(value):
+                continue
+
+            try:
+                if date_format is None:
+                    iso_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+                    datetime.fromisoformat(iso_value)
+                else:
+                    datetime.strptime(value, date_format)
+            except ValueError:
+                continue
+
+            return value
     return None
+
+
+def pick_date_only(dates):
+    return pick_valid_date(dates)
 
 
 def pick_source_url(identifiers):
@@ -83,7 +101,7 @@ def parse_oai_dc_metadata(dc_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=(get_texts(dc_node, "dc:title") or [None])[0],
         authors=creators if creators else contributors,
-        date=pick_date_only(dates),
+        date=pick_valid_date(dates),
         abstract=descriptions[0] if descriptions else None,
         identifiers=identifiers,
         subjects=get_texts(dc_node, "dc:subject"),
@@ -103,7 +121,7 @@ def parse_qdc_metadata(qdc_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=titles[0] if titles else None,
         authors=creators if creators else contributors,
-        date=issued_dates[0] if issued_dates else pick_date_only(dates),
+        date=pick_valid_date(issued_dates) or pick_valid_date(dates),
         abstract=descriptions[0] if descriptions else None,
         identifiers=identifiers,
         subjects=get_direct_texts_by_name(qdc_node, {"subject"}),
@@ -135,7 +153,7 @@ def parse_dim_metadata(dim_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=titles[0] if titles else None,
         authors=creators if creators else contributors,
-        date=issued_dates[0] if issued_dates else pick_date_only(dates),
+        date=pick_valid_date(issued_dates) or pick_valid_date(dates),
         abstract=descriptions[0] if descriptions else None,
         identifiers=identifiers,
         subjects=dim_field_texts(dim_node, "subject"),
@@ -153,7 +171,7 @@ def parse_mods_metadata(mods_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=titles[0] if titles else None,
         authors=get_texts(mods_node, ".//mods:name/mods:namePart"),
-        date=issued_dates[0] if issued_dates else pick_date_only(dates),
+        date=pick_valid_date(issued_dates) or pick_valid_date(dates),
         abstract=abstracts[0] if abstracts else None,
         identifiers=identifiers,
         subjects=get_texts(mods_node, ".//mods:subject/mods:topic"),
@@ -187,7 +205,12 @@ def parse_oai_xml(xml_text: str, metadata_prefix="oai_dc"):
         metadata = record.find("oai:metadata", NS)
         if metadata is None:
             continue
-        parsed_record = parse_metadata(metadata, metadata_prefix, get_oai_identifier(record))
+
+        oai_identifier = get_oai_identifier(record)
+        if not oai_identifier:
+            continue
+
+        parsed_record = parse_metadata(metadata, metadata_prefix, oai_identifier)
         if parsed_record is not None:
             parsed_records.append(parsed_record)
 

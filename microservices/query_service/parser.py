@@ -72,6 +72,9 @@ def extract_year_constraints(query: str) -> dict:
                 year_to = year
             clean = re.sub(pattern, " ", clean, flags=re.IGNORECASE)
 
+    if year_from is not None and year_to is not None and year_from > year_to:
+        year_from, year_to = year_to, year_from
+
     return {
         "clean_query": normalize_text(clean),
         "year_from": year_from,
