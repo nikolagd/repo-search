@@ -2,6 +2,8 @@
 
 This package compares three retrieval methods without supplying evaluation topics, relevance judgments, or thesis results. Files in `templates/` are intentionally empty. Real queries and judgments must be created and reviewed separately.
 
+Production run collection is documented in `COLLECT_RUNS.md` and available through `python -m evaluation collect-runs`.
+
 ## Methods
 
 - `keyword`: deterministic local baseline over the supplied publication corpus. Text is Unicode NFKC-normalized and case-folded, then split into Unicode word tokens. The score is `2 * title query-term frequency + abstract query-term frequency`, using unique query terms. Documents with score zero are omitted. Ties are resolved by ascending string publication ID. This is a simple internal comparator; it does not reproduce DSpace, Google Scholar, PostgreSQL full-text search, or another external engine.

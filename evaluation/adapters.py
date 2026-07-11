@@ -83,7 +83,11 @@ class VectorOnlyAdapter:
         for row in rows:
             if isinstance(row, dict):
                 publication_id = row["id"]
-                score = row.get("cosine_similarity", 1 - float(row["cosine_distance"]))
+                score = (
+                    row["cosine_similarity"]
+                    if "cosine_similarity" in row
+                    else 1 - float(row["cosine_distance"])
+                )
                 title, abstract, source_url = row.get("title"), row.get("abstract"), row.get("source_url")
             else:
                 publication_id, title, abstract, source_url = row[0], row[1], row[2], row[3]
@@ -119,7 +123,7 @@ class FullPipelineAdapter:
             for row in response.get("results", [])[:limit]
         ]
         plan = response.get("plan") or {}
-        parser_mode = plan.get("parser_mode") or ("fallback" if plan.get("used_fallback") else "unknown")
+        parser_mode = plan.get("parser_mode")
         return QueryRun(
             query.query_id,
             self.method,

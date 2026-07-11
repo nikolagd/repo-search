@@ -112,6 +112,22 @@ def test_duplicate_and_unknown_query_references_fail(tmp_path) -> None:
         load_runs(unknown_run, {"q1"}, METHODS)
 
 
+@pytest.mark.parametrize(
+    "query_row",
+    [
+        {"query_id": 1, "text": "query"},
+        {"query_id": " ", "text": "query"},
+        {"query_id": "q1", "text": 1},
+        {"query_id": "q1", "text": "   "},
+        {"query_id": "q1", "text": "query", "extra": True},
+    ],
+)
+def test_malformed_queries_fail_before_collection(tmp_path, query_row) -> None:
+    path = _write(tmp_path / "malformed-queries.json", {"queries": [query_row]})
+    with pytest.raises(ValueError, match="non-empty strings"):
+        load_queries(path)
+
+
 def test_duplicate_run_unknown_method_and_non_finite_score_fail(tmp_path) -> None:
     duplicate = _write(tmp_path / "duplicate.json", {"runs": [_run(), _run()]})
     with pytest.raises(ValueError, match="duplicate run"):

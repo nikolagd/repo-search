@@ -41,6 +41,17 @@ def test_vector_adapter_uses_original_query_and_existing_fetch_shape() -> None:
     assert run.results[0].score == 0.75
 
 
+def test_vector_adapter_accepts_similarity_dict_without_eager_distance_lookup() -> None:
+    run = asyncio.run(
+        VectorOnlyAdapter(
+            lambda _text: [0.1],
+            lambda *_args: [{"id": 4, "cosine_similarity": 0.8, "title": "Result"}],
+        ).retrieve(EvaluationQuery("q1", "query"), 1)
+    )
+    assert run.results[0].publication_id == "4"
+    assert run.results[0].score == 0.8
+
+
 def test_full_pipeline_adapter_preserves_parser_mode_from_mocked_service() -> None:
     async def search(text, limit):
         assert (text, limit) == ("query", 3)
