@@ -138,6 +138,7 @@ services:
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       QUERY_SERVICE_URL: http://query-service:8000
       EMBEDDING_SERVICE_URL: http://embedding-service:8000
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
     depends_on:
       db-primary:
         condition: service_healthy
@@ -186,6 +187,7 @@ services:
     gpus: all
     environment:
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}

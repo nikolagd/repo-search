@@ -6,11 +6,16 @@ from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from microservices.common.app_logging import app_observability_log_query_text, emit_app_event
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
+from microservices.common.embedding_provenance import (
+    EXPECTED_EMBEDDING_DIMENSION,
+    embedding_is_current,
+    embedding_model_name,
+)
 from microservices.common.http import observed_async_request, raise_for_service
 from microservices.common.observability import (
     normalize_parser_mode,
@@ -41,6 +46,30 @@ LOW_SCORE_THRESHOLD = float(os.getenv("APP_OBSERVABILITY_LOW_SCORE_THRESHOLD", "
 
 class PublicationEmbeddingRequest(BaseModel):
     embedding: list[float] | None = None
+    embedding_model: str | None = Field(default=None, min_length=1)
+    embedding_dimension: int | None = Field(default=None, gt=0)
+    embedding_generated_at: datetime | None = None
+    embedding_source_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_dimension(self) -> "PublicationEmbeddingRequest":
+        if self.embedding is None:
+            if any(
+                value is not None
+                for value in (
+                    self.embedding_model,
+                    self.embedding_dimension,
+                    self.embedding_generated_at,
+                    self.embedding_source_hash,
+                )
+            ):
+                raise ValueError("embedding provenance cannot be stored without a vector")
+            return self
+        if self.embedding_dimension is not None and self.embedding_dimension != len(self.embedding):
+            raise ValueError("embedding_dimension does not match the vector length")
+        if len(self.embedding) != EXPECTED_EMBEDDING_DIMENSION:
+            raise ValueError(f"embedding vector length must be {EXPECTED_EMBEDDING_DIMENSION}")
+        return self
 
 
 def serialize_datetime(value: Any) -> str | None:
@@ -77,11 +106,15 @@ def ensure_schema() -> None:
                 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
                 ALTER TABLE publication
-                    ADD COLUMN IF NOT EXISTS embedding vector(1024);
+                    ADD COLUMN IF NOT EXISTS embedding vector(1024),
+                    ADD COLUMN IF NOT EXISTS embedding_model TEXT,
+                    ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER,
+                    ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS embedding_source_hash TEXT;
 
                 DO $$
                 BEGIN
-                    IF to_regclass('public.publication_search') IS NOT NULL THEN
+                    IF to_regclass('publication_search') IS NOT NULL THEN
                         UPDATE publication p
                         SET embedding = ps.embedding
                         FROM publication_search ps
@@ -252,44 +285,73 @@ def load_index_status() -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                    COUNT(*),
-                    COUNT(*) FILTER (WHERE embedding IS NOT NULL),
-                    COUNT(*) FILTER (WHERE embedding IS NULL)
-                FROM publication
-                """
-            )
-            indexed, with_embeddings, missing = cur.fetchone()
-
-            cur.execute(
-                """
-                SELECT COALESCE(r.name, 'unknown') AS repository,
-                       COUNT(p.id) AS publications,
-                       COUNT(p.id) FILTER (WHERE p.embedding IS NOT NULL) AS publications_with_embeddings,
-                       COUNT(p.id) FILTER (WHERE p.embedding IS NULL) AS missing_embeddings
+                SELECT p.title, p.abstract, p.embedding IS NOT NULL,
+                       p.embedding_model, p.embedding_dimension,
+                       p.embedding_generated_at, p.embedding_source_hash,
+                       COALESCE(r.name, 'unknown')
                 FROM publication p
                 LEFT JOIN repository r ON r.id = p.repository_id
-                GROUP BY r.name
-                ORDER BY r.name
                 """
             )
-            repositories = [
-                {
-                    "repository": row[0],
-                    "publications": row[1],
-                    "publications_with_embeddings": row[2],
-                    "missing_embeddings": row[3],
-                }
-                for row in cur.fetchall()
-            ]
+            rows = cur.fetchall()
     finally:
         conn.close()
 
+    model_name = embedding_model_name()
+    indexed = len(rows)
+    with_embeddings = 0
+    missing = 0
+    current = 0
+    stale = 0
+    repository_counts: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        publication = {
+            "title": row[0],
+            "abstract": row[1],
+            "has_embedding": row[2],
+            "embedding_model": row[3],
+            "embedding_dimension": row[4],
+            "embedding_generated_at": row[5],
+            "embedding_source_hash": row[6],
+        }
+        repository = repository_counts.setdefault(
+            row[7],
+            {
+                "repository": row[7],
+                "publications": 0,
+                "publications_with_embeddings": 0,
+                "current_embeddings": 0,
+                "missing_embeddings": 0,
+                "stale_embeddings": 0,
+            },
+        )
+        repository["publications"] += 1
+        if not publication["has_embedding"]:
+            missing += 1
+            repository["missing_embeddings"] += 1
+        elif embedding_is_current(
+            publication,
+            model_name=model_name,
+            dimension=EXPECTED_EMBEDDING_DIMENSION,
+        ):
+            with_embeddings += 1
+            current += 1
+            repository["publications_with_embeddings"] += 1
+            repository["current_embeddings"] += 1
+        else:
+            with_embeddings += 1
+            stale += 1
+            repository["publications_with_embeddings"] += 1
+            repository["stale_embeddings"] += 1
+
+    repositories = sorted(repository_counts.values(), key=lambda item: item["repository"])
     coverage = with_embeddings / indexed if indexed else 0
     return {
         "indexed_publications": indexed,
         "publications_with_embeddings": with_embeddings,
+        "current_embeddings": current,
         "missing_embeddings": missing,
+        "stale_embeddings": stale,
         "embedding_coverage_ratio": coverage,
         "repositories": repositories,
     }
@@ -448,7 +510,9 @@ def embedding_status() -> dict[str, int]:
     return {
         "indexed_publications": status["indexed_publications"],
         "publications_with_embeddings": status["publications_with_embeddings"],
+        "current_embeddings": status["current_embeddings"],
         "missing_embeddings": status["missing_embeddings"],
+        "stale_embeddings": status["stale_embeddings"],
     }
 
 
@@ -475,10 +539,21 @@ def upsert_publication_embedding(publication_id: int, request: PublicationEmbedd
             cur.execute(
                 """
                 UPDATE publication
-                SET embedding = %s
+                SET embedding = %s,
+                    embedding_model = %s,
+                    embedding_dimension = %s,
+                    embedding_generated_at = %s,
+                    embedding_source_hash = %s
                 WHERE id = %s
                 """,
-                (request.embedding, publication_id),
+                (
+                    request.embedding,
+                    request.embedding_model,
+                    request.embedding_dimension,
+                    request.embedding_generated_at,
+                    request.embedding_source_hash,
+                    publication_id,
+                ),
             )
 
             if cur.rowcount == 0:

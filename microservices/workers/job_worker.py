@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from microservices.common.app_logging import emit_app_event
 from microservices.common.config import service_url
+from microservices.common.embedding_provenance import embedding_is_current
 from microservices.common.db import get_connection
 from microservices.common.http import observed_sync_request
 from microservices.common.observability import (
@@ -337,19 +338,19 @@ def sync_publication_to_search(publication: dict[str, Any]) -> None:
             "repo_search.repository.id": publication.get("repository_id"),
         },
     ):
-        embedding = request_json(
+        embedding_response = request_json(
             "POST",
             f"{EMBEDDING_SERVICE_URL}/embed/document",
             json={
                 "title": publication.get("title"),
                 "abstract": publication.get("abstract"),
             },
-        )["embedding"]
+        )
 
         request_json(
             "POST",
             f"{SEARCH_SERVICE_URL}/publications/{publication['id']}/embedding",
-            json={"embedding": embedding},
+            json=embedding_response,
         )
 
 
@@ -440,9 +441,14 @@ def harvest_repository(job: dict[str, Any]) -> int:
 def backfill_embeddings() -> int:
     with trace_span("job.backfill_embeddings") as span:
         publications = request_json("GET", f"{CATALOG_SERVICE_URL}/publications")
+        model_status = request_json("GET", f"{EMBEDDING_SERVICE_URL}/model/status")
+        model_name = model_status["embedding_model"]
+        dimension = model_status["embedding_dimension"]
         processed = 0
 
         for publication in publications:
+            if embedding_is_current(publication, model_name=model_name, dimension=dimension):
+                continue
             sync_publication_to_search(publication)
             processed += 1
 

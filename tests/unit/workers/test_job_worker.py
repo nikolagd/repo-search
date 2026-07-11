@@ -221,3 +221,70 @@ def test_non_retryable_validation_failure_is_not_requeued(
     job_worker.run_job(job)
 
     assert decisions == [False]
+
+
+def test_sync_publication_persists_embedding_and_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    provenance = {
+        "embedding": [0.0] * 1024,
+        "embedding_model": "model-a",
+        "embedding_dimension": 1024,
+        "embedding_generated_at": "2026-07-11T10:00:00+00:00",
+        "embedding_source_hash": "a" * 64,
+    }
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def request(method: str, url: str, **kwargs):
+        calls.append((method, url, kwargs.get("json")))
+        return provenance if url.endswith("/embed/document") else {"status": "ok"}
+
+    monkeypatch.setattr(job_worker, "request_json", request)
+    monkeypatch.setattr(job_worker, "trace_span", lambda *_args, **_kwargs: nullcontext(None))
+
+    job_worker.sync_publication_to_search({"id": 4, "title": "Title", "abstract": "Abstract"})
+
+    assert calls[1][2] == provenance
+
+
+def test_backfill_skips_current_and_regenerates_missing_or_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from microservices.common.embedding_provenance import document_source_hash
+
+    publications = [
+        {
+            "id": 1,
+            "title": "Current",
+            "abstract": None,
+            "has_embedding": True,
+            "embedding_model": "model-a",
+            "embedding_dimension": 1024,
+            "embedding_generated_at": "2026-07-11T10:00:00+00:00",
+            "embedding_source_hash": document_source_hash("Current", None),
+        },
+        {"id": 2, "title": "Missing", "abstract": None, "has_embedding": False},
+        {
+            "id": 3,
+            "title": "Changed",
+            "abstract": None,
+            "has_embedding": True,
+            "embedding_model": "model-a",
+            "embedding_dimension": 1024,
+            "embedding_generated_at": "2026-07-11T10:00:00+00:00",
+            "embedding_source_hash": document_source_hash("Old", None),
+        },
+    ]
+
+    def request(_method: str, url: str, **_kwargs):
+        if url.endswith("/publications"):
+            return publications
+        if url.endswith("/model/status"):
+            return {"embedding_model": "model-a", "embedding_dimension": 1024}
+        raise AssertionError(url)
+
+    regenerated: list[int] = []
+    monkeypatch.setattr(job_worker, "request_json", request)
+    monkeypatch.setattr(job_worker, "sync_publication_to_search", lambda publication: regenerated.append(publication["id"]))
+    monkeypatch.setattr(job_worker, "trace_span", lambda *_args, **_kwargs: nullcontext(None))
+
+    assert job_worker.backfill_embeddings() == 2
+    assert regenerated == [2, 3]

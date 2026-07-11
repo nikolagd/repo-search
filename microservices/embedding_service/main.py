@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
 from microservices.common.app_logging import emit_app_event
+from microservices.common.embedding_provenance import document_source_hash, utc_generated_at
 from microservices.common.observability import observe_embedding, set_retrieval_model_info, setup_observability
 from microservices.common.schemas import HealthResponse
 from microservices.embedding_service.model import MODEL_NAME, build_document_text, device, model, warm_up_embedding_model
@@ -73,7 +74,7 @@ def embed_query(request: QueryEmbeddingRequest) -> dict[str, list[float]]:
 
 
 @app.post("/embed/document", dependencies=[Depends(require_api_token)])
-def embed_document(request: DocumentEmbeddingRequest) -> dict[str, list[float]]:
+def embed_document(request: DocumentEmbeddingRequest) -> dict[str, object]:
     with observe_embedding("embedding-service", "document") as span:
         document_text = build_document_text(request.title, request.abstract)
         if span is not None:
@@ -93,4 +94,10 @@ def embed_document(request: DocumentEmbeddingRequest) -> dict[str, list[float]]:
             model=MODEL_NAME,
             device=device,
         )
-    return {"embedding": vector}
+    return {
+        "embedding": vector,
+        "embedding_model": MODEL_NAME,
+        "embedding_dimension": len(vector),
+        "embedding_generated_at": utc_generated_at().isoformat(),
+        "embedding_source_hash": document_source_hash(request.title, request.abstract),
+    }

@@ -18,6 +18,7 @@ data:
   SEARCH_SERVICE_URL: http://search-service:8000
   QUERY_SERVICE_URL: http://query-service:8000
   EMBEDDING_SERVICE_URL: http://embedding-service:8000
+  EMBEDDING_MODEL: intfloat/multilingual-e5-large
   JOB_SERVICE_URL: http://job-service:8000
   PROMETHEUS_URL: http://prometheus:9090
   LLM_PROVIDER: ollama

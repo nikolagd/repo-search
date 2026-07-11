@@ -1,25 +1,15 @@
 from sentence_transformers import SentenceTransformer
 import torch
 
-MODEL_NAME = "intfloat/multilingual-e5-large"
+from microservices.common.embedding_provenance import build_document_text, embedding_model_name
+
+MODEL_NAME = embedding_model_name()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 model = SentenceTransformer(
     MODEL_NAME,
     device=device,
 )
-
-
-def build_document_text(title, abstract):
-    parts = []
-
-    if title:
-        parts.append(f"Title: {title}")
-    if abstract:
-        parts.append(f"Abstract: {abstract}")
-
-    body = "\n".join(parts).strip()
-    return f"passage: {body}"
 
 
 def warm_up_embedding_model():
