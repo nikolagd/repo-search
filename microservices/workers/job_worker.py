@@ -5,7 +5,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any
+from uuid import uuid4
 
 from microservices.common.app_logging import emit_app_event
 from microservices.common.config import service_url
@@ -27,8 +29,23 @@ CATALOG_SERVICE_URL = service_url("CATALOG_SERVICE_URL", "http://catalog-service
 EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-service:8000")
 SEARCH_SERVICE_URL = service_url("SEARCH_SERVICE_URL", "http://search-service:8000")
 POLL_INTERVAL_SECONDS = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
+HEARTBEAT_INTERVAL_SECONDS = float(os.getenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "15"))
+STALE_JOB_TIMEOUT_SECONDS = float(os.getenv("WORKER_STALE_JOB_TIMEOUT_SECONDS", "120"))
+MAX_ATTEMPTS = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
+HEARTBEAT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 OUTPUT_DIR = Path(os.getenv("HARVEST_OUTPUT_DIR", "/app/data"))
 SERVICE_NAME = "job-worker"
+
+if HEARTBEAT_INTERVAL_SECONDS <= 0:
+    raise ValueError("WORKER_HEARTBEAT_INTERVAL_SECONDS must be greater than zero.")
+if STALE_JOB_TIMEOUT_SECONDS <= HEARTBEAT_INTERVAL_SECONDS:
+    raise ValueError("WORKER_STALE_JOB_TIMEOUT_SECONDS must be greater than the heartbeat interval.")
+if MAX_ATTEMPTS <= 0:
+    raise ValueError("WORKER_MAX_ATTEMPTS must be greater than zero.")
+
+
+class NonRetryableJobError(RuntimeError):
+    pass
 
 
 def request_json(method: str, url: str, **kwargs) -> Any:
@@ -39,7 +56,8 @@ def request_json(method: str, url: str, **kwargs) -> Any:
     return response.json() if response.content else None
 
 
-def claim_next_job() -> dict[str, Any] | None:
+def claim_next_job(max_attempts: int = MAX_ATTEMPTS) -> dict[str, Any] | None:
+    lease_token = uuid4().hex
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -48,24 +66,35 @@ def claim_next_job() -> dict[str, Any] | None:
                 UPDATE admin_job
                 SET status = 'running',
                     started_at = NOW(),
+                    finished_at = NULL,
+                    heartbeat_at = NOW(),
+                    lease_token = %s,
+                    attempt_count = attempt_count + 1,
                     message = 'Job started.',
                     updated_at = NOW()
                 WHERE id = (
                     SELECT id
                     FROM admin_job
-                    WHERE status = 'queued'
-                    ORDER BY started_at
+                    WHERE status = 'queued' AND attempt_count < %s
+                    ORDER BY created_at, id
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
                 )
-                RETURNING id, job_type, repository_id
-                """
+                RETURNING id, job_type, repository_id, attempt_count, lease_token
+                """,
+                (lease_token, max_attempts),
             )
             row = cur.fetchone()
         conn.commit()
         if row is None:
             return None
-        return {"id": row[0], "job_type": row[1], "repository_id": row[2]}
+        return {
+            "id": row[0],
+            "job_type": row[1],
+            "repository_id": row[2],
+            "attempt_count": row[3],
+            "lease_token": row[4],
+        }
     except Exception:
         conn.rollback()
         raise
@@ -73,7 +102,39 @@ def claim_next_job() -> dict[str, Any] | None:
         conn.close()
 
 
-def finish_job(job_id: int, status: str, processed_records: int | None, message: str) -> None:
+def refresh_job_heartbeat(job_id: int, lease_token: str) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE admin_job
+                SET heartbeat_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND status = 'running'
+                  AND lease_token = %s
+                RETURNING id
+                """,
+                (job_id, lease_token),
+            )
+            updated = cur.fetchone() is not None
+        conn.commit()
+        return updated
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def finish_job(
+    job_id: int,
+    lease_token: str,
+    status: str,
+    processed_records: int | None,
+    message: str,
+) -> bool:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -84,17 +145,188 @@ def finish_job(job_id: int, status: str, processed_records: int | None, message:
                     finished_at = NOW(),
                     processed_records = %s,
                     message = %s,
+                    heartbeat_at = NULL,
+                    lease_token = NULL,
                     updated_at = NOW()
                 WHERE id = %s
+                  AND status = 'running'
+                  AND lease_token = %s
+                RETURNING id
                 """,
-                (status, processed_records, message, job_id),
+                (status, processed_records, message, job_id, lease_token),
             )
+            updated = cur.fetchone() is not None
         conn.commit()
+        return updated
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+
+
+def failure_outcome(attempt_count: int, retryable: bool, max_attempts: int = MAX_ATTEMPTS) -> str:
+    return "queued" if retryable and attempt_count < max_attempts else "failed"
+
+
+def fail_or_requeue_job(
+    job: dict[str, Any],
+    error: str,
+    *,
+    retryable: bool,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> str | None:
+    outcome = failure_outcome(job["attempt_count"], retryable, max_attempts)
+    if outcome == "queued":
+        message = (
+            f"Job failed on attempt {job['attempt_count']}/{max_attempts} and was requeued: {error}"
+        )
+    elif retryable:
+        message = f"Job failed after final attempt {job['attempt_count']}/{max_attempts}: {error}"
+    else:
+        message = f"Job failed without retry: {error}"
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE admin_job
+                SET status = %s,
+                    finished_at = CASE WHEN %s = 'failed' THEN NOW() ELSE NULL END,
+                    message = %s,
+                    heartbeat_at = NULL,
+                    lease_token = NULL,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND status = 'running'
+                  AND lease_token = %s
+                RETURNING status
+                """,
+                (outcome, outcome, message, job["id"], job["lease_token"]),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return row[0] if row is not None else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def recover_stale_jobs(
+    stale_timeout_seconds: float = STALE_JOB_TIMEOUT_SECONDS,
+    max_attempts: int = MAX_ATTEMPTS,
+    batch_size: int = 100,
+) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH stale_jobs AS (
+                    SELECT id
+                    FROM admin_job
+                    WHERE status = 'running'
+                      AND COALESCE(heartbeat_at, started_at, created_at)
+                          < NOW() - (%s * INTERVAL '1 second')
+                    ORDER BY COALESCE(heartbeat_at, started_at, created_at), id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT %s
+                )
+                UPDATE admin_job AS job
+                SET status = CASE
+                        WHEN job.attempt_count < %s THEN 'queued'
+                        ELSE 'failed'
+                    END,
+                    finished_at = CASE
+                        WHEN job.attempt_count < %s THEN NULL
+                        ELSE NOW()
+                    END,
+                    message = CASE
+                        WHEN job.attempt_count < %s
+                            THEN format(
+                                'Recovered stale lease after attempt %%s/%%s; job requeued.',
+                                job.attempt_count,
+                                %s
+                            )
+                        ELSE format(
+                            'Stale lease reached maximum attempts %%s/%%s; job failed.',
+                            job.attempt_count,
+                            %s
+                        )
+                    END,
+                    heartbeat_at = NULL,
+                    lease_token = NULL,
+                    updated_at = NOW()
+                FROM stale_jobs
+                WHERE job.id = stale_jobs.id
+                RETURNING job.id, job.status, job.attempt_count, job.message
+                """,
+                (
+                    stale_timeout_seconds,
+                    batch_size,
+                    max_attempts,
+                    max_attempts,
+                    max_attempts,
+                    max_attempts,
+                    max_attempts,
+                ),
+            )
+            rows = cur.fetchall()
+        conn.commit()
+        return [
+            {"id": row[0], "status": row[1], "attempt_count": row[2], "message": row[3]}
+            for row in rows
+        ]
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+class JobHeartbeat:
+    def __init__(
+        self,
+        job: dict[str, Any],
+        interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+        shutdown_timeout_seconds: float = HEARTBEAT_SHUTDOWN_TIMEOUT_SECONDS,
+    ):
+        self.job = job
+        self.interval_seconds = interval_seconds
+        self.shutdown_timeout_seconds = shutdown_timeout_seconds
+        self._stop = Event()
+        self._lease_lost = Event()
+        self._thread = Thread(target=self._run, name=f"job-heartbeat-{job['id']}", daemon=True)
+
+    @property
+    def lease_lost(self) -> bool:
+        return self._lease_lost.is_set()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                if not refresh_job_heartbeat(self.job["id"], self.job["lease_token"]):
+                    self._lease_lost.set()
+                    return
+            except Exception as exc:
+                print(f"Job heartbeat failed: {exc}", file=sys.stderr, flush=True)
+
+    def __enter__(self) -> JobHeartbeat:
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._stop.set()
+        self._thread.join(timeout=self.shutdown_timeout_seconds)
+        if self._thread.is_alive():
+            print(
+                f"Job heartbeat shutdown timed out for job {self.job['id']}.",
+                file=sys.stderr,
+                flush=True,
+            )
 
 
 def sync_publication_to_search(publication: dict[str, Any]) -> None:
@@ -219,6 +451,28 @@ def backfill_embeddings() -> int:
         return processed
 
 
+def execute_job(job: dict[str, Any]) -> tuple[int, str, str]:
+    if job["job_type"] == "repository_harvest":
+        if job.get("repository_id") is None:
+            raise NonRetryableJobError("Repository harvest job is missing repository_id.")
+        processed = harvest_repository(job)
+        return (
+            processed,
+            "job.harvest_completed",
+            f"Harvest completed. Processed records: {processed}.",
+        )
+
+    if job["job_type"] == "embedding_backfill":
+        processed = backfill_embeddings()
+        return (
+            processed,
+            "job.embedding_backfill_completed",
+            f"Embedding backfill completed. Embedded records: {processed}.",
+        )
+
+    raise NonRetryableJobError(f"Unsupported job type: {job['job_type']}")
+
+
 def run_job(job: dict[str, Any]) -> None:
     started_at = time.perf_counter()
     status = "failed"
@@ -229,54 +483,62 @@ def run_job(job: dict[str, Any]) -> None:
             "repo_search.job.id": job["id"],
             "repo_search.job.type": job["job_type"],
             "repo_search.repository.id": job.get("repository_id"),
+            "repo_search.job.attempt_count": job.get("attempt_count"),
         },
     ) as span:
         try:
-            if job["job_type"] == "repository_harvest":
-                processed = harvest_repository(job)
-                finish_job(
-                    job["id"],
-                    "succeeded",
-                    processed,
-                    f"Harvest completed. Processed records: {processed}.",
-                )
-                if span is not None:
-                    span.set_attribute("repo_search.records_processed", processed)
+            heartbeat = JobHeartbeat(job)
+            with heartbeat:
+                processed, completion_event, completion_message = execute_job(job)
+
+            if heartbeat.lease_lost:
+                status = "lease_lost"
                 emit_app_event(
-                    "job.harvest_completed",
+                    "job.lease_lost",
                     SERVICE_NAME,
                     job_id=job["id"],
-                    repository_id=job.get("repository_id"),
-                    processed_records=processed,
-                    status="succeeded",
-                    duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                    job_type=job["job_type"],
+                    attempt_count=job.get("attempt_count"),
+                    status=status,
                 )
-                status = "succeeded"
                 return
 
-            if job["job_type"] == "embedding_backfill":
-                processed = backfill_embeddings()
-                finish_job(
-                    job["id"],
-                    "succeeded",
-                    processed,
-                    f"Embedding backfill completed. Embedded records: {processed}.",
-                )
-                if span is not None:
-                    span.set_attribute("repo_search.records_processed", processed)
+            completed = finish_job(
+                job["id"],
+                job["lease_token"],
+                "succeeded",
+                processed,
+                completion_message,
+            )
+            if not completed:
+                status = "lease_lost"
                 emit_app_event(
-                    "job.embedding_backfill_completed",
+                    "job.lease_lost",
                     SERVICE_NAME,
                     job_id=job["id"],
-                    processed_records=processed,
-                    status="succeeded",
-                    duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                    job_type=job["job_type"],
+                    attempt_count=job.get("attempt_count"),
+                    status=status,
                 )
-                status = "succeeded"
                 return
 
-            finish_job(job["id"], "failed", None, f"Unsupported job type: {job['job_type']}")
+            if span is not None:
+                span.set_attribute("repo_search.records_processed", processed)
+            emit_app_event(
+                completion_event,
+                SERVICE_NAME,
+                job_id=job["id"],
+                repository_id=job.get("repository_id"),
+                processed_records=processed,
+                attempt_count=job.get("attempt_count"),
+                status="succeeded",
+                duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+            )
+            status = "succeeded"
         except Exception as exc:
+            retryable = not isinstance(exc, NonRetryableJobError)
+            outcome = fail_or_requeue_job(job, str(exc), retryable=retryable)
+            status = outcome or "failed"
             if span is not None:
                 span.set_attribute("repo_search.job.error", str(exc))
             emit_app_event(
@@ -285,11 +547,12 @@ def run_job(job: dict[str, Any]) -> None:
                 job_id=job["id"],
                 job_type=job["job_type"],
                 repository_id=job.get("repository_id"),
-                status="failed",
+                attempt_count=job.get("attempt_count"),
+                retryable=retryable,
+                status=status,
                 error=str(exc),
                 duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
             )
-            finish_job(job["id"], "failed", None, f"Job failed: {exc}")
         finally:
             if span is not None:
                 span.set_attribute("repo_search.job.status", status)
@@ -301,6 +564,7 @@ def main() -> None:
     start_worker_observability(SERVICE_NAME)
     while True:
         try:
+            recover_stale_jobs()
             job = claim_next_job()
         except Exception as exc:
             print(f"Worker poll failed: {exc}", file=sys.stderr, flush=True)
