@@ -49,6 +49,22 @@ def test_fallback_parser_builds_deterministic_plan_without_external_services() -
     }
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Find papers about AI after 2020 before 2010",
+        "Radovi o AI nakon 2020 pre 2010",
+    ],
+)
+def test_fallback_parser_swaps_reversed_year_boundaries(query: str) -> None:
+    plan = parse_query_fallback(query)
+
+    assert plan["embedding_queries"] == ["ai"]
+    assert plan["semantic_query"] == "ai"
+    assert plan["year_from"] == 2009
+    assert plan["year_to"] == 2021
+
+
 def test_fallback_parser_preserves_original_query_when_only_a_filler_remains() -> None:
     plan = parse_query_fallback("Find papers about")
 
