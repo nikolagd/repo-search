@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+import evaluation.cli as cli_module
 from evaluation.cli import main
 
 
@@ -178,3 +179,123 @@ def test_candidate_pool_duplicate_method_arguments_fail(tmp_path) -> None:
                 "keyword",
             ]
         )
+
+
+def test_collect_runs_cli_rejects_missing_or_whitespace_secrets_by_variable_name(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    queries = tmp_path / "queries.json"
+    _write(queries, {"queries": [{"query_id": "q1", "text": "query"}]})
+    monkeypatch.delenv("COLLECTOR_DB", raising=False)
+    monkeypatch.setenv("COLLECTOR_TOKEN", "   ")
+
+    with pytest.raises(SystemExit, match="COLLECTOR_DB") as error:
+        main(
+            [
+                "collect-runs",
+                "--queries",
+                str(queries),
+                "--output",
+                str(tmp_path / "runs.json"),
+                "--database-url-env",
+                "COLLECTOR_DB",
+                "--api-token-env",
+                "COLLECTOR_TOKEN",
+                "--embedding-service-url",
+                "http://embedding.test",
+                "--full-pipeline-url",
+                "http://gateway.test/api/search",
+                "--embedding-model",
+                "model",
+                "--expected-corpus-size",
+                "1",
+                "--expected-snapshot-hash",
+                "a" * 64,
+            ]
+        )
+    captured = capsys.readouterr()
+    combined = str(error.value) + captured.out + captured.err
+    assert "COLLECTOR_DB" in combined
+    assert "sentinel-password" not in combined
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "nan", "inf"])
+def test_collect_runs_cli_rejects_invalid_timeout_before_runtime_setup(tmp_path, timeout) -> None:
+    queries = tmp_path / "queries.json"
+    _write(queries, {"queries": [{"query_id": "q1", "text": "query"}]})
+    with pytest.raises(SystemExit, match="finite and positive"):
+        main(
+            [
+                "collect-runs",
+                "--queries",
+                str(queries),
+                "--output",
+                str(tmp_path / "runs.json"),
+                "--request-timeout",
+                timeout,
+                "--embedding-service-url",
+                "http://embedding.test",
+                "--full-pipeline-url",
+                "http://gateway.test/api/search",
+                "--embedding-model",
+                "model",
+                "--expected-corpus-size",
+                "1",
+                "--expected-snapshot-hash",
+                "a" * 64,
+            ]
+        )
+
+
+def test_collect_runs_cli_passes_protected_configuration_without_printing_secrets(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    queries = tmp_path / "queries.json"
+    output = tmp_path / "runs.json"
+    _write(queries, {"queries": [{"query_id": "q1", "text": "veštačka inteligencija"}]})
+    monkeypatch.setenv("COLLECTOR_DB", "postgresql://user:sentinel-password@database/eval")
+    monkeypatch.setenv("COLLECTOR_TOKEN", "sentinel-token")
+    captured_arguments = {}
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured_arguments["client"] = kwargs
+
+    async def fake_run_collection(**kwargs):
+        captured_arguments["run"] = kwargs
+        output.write_text('{"runs": []}', encoding="utf-8")
+
+    monkeypatch.setattr(cli_module, "EvaluationServiceClient", Client)
+    monkeypatch.setattr(cli_module, "run_collection", fake_run_collection)
+
+    assert (
+        main(
+            [
+                "collect-runs",
+                "--queries",
+                str(queries),
+                "--output",
+                str(output),
+                "--database-url-env",
+                "COLLECTOR_DB",
+                "--api-token-env",
+                "COLLECTOR_TOKEN",
+                "--embedding-service-url",
+                "http://embedding.test",
+                "--full-pipeline-url",
+                "http://gateway.test/api/search",
+                "--embedding-model",
+                "model",
+                "--expected-corpus-size",
+                "1",
+                "--expected-snapshot-hash",
+                "a" * 64,
+            ]
+        )
+        == 0
+    )
+    combined = capsys.readouterr().out + output.read_text(encoding="utf-8")
+    assert "sentinel-password" not in combined
+    assert "sentinel-token" not in combined
+    assert captured_arguments["client"]["api_token"] == "sentinel-token"
+    assert captured_arguments["run"]["queries"][0].text == "veštačka inteligencija"

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import json
+import math
+import os
 import subprocess
 from pathlib import Path
 
 from evaluation.io import load_judgments, load_queries, load_runs, validate_comparison_matrix, write_json
+from evaluation.collector import CollectorError, EvaluationServiceClient, run_collection, validate_methods
 from evaluation.pooling import build_candidate_pool
 from evaluation.reporting import build_report, write_report
 
@@ -63,11 +67,77 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
     report.add_argument("--ranking-config", default="{}", help="JSON object or path to a JSON file")
     report.add_argument("--git-commit")
+
+    collect = commands.add_parser("collect-runs", help="collect keyword, vector-only, and full-pipeline runs")
+    collect.add_argument("--queries", required=True)
+    collect.add_argument("--output", required=True)
+    collect.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
+    collect.add_argument("--limit", type=int, default=20)
+    collect.add_argument("--database-url-env", default="EVALUATION_DATABASE_URL")
+    collect.add_argument("--api-token-env", default="EVALUATION_API_TOKEN")
+    collect.add_argument("--embedding-service-url", required=True)
+    collect.add_argument("--full-pipeline-url", required=True)
+    collect.add_argument("--request-timeout", type=float, default=180.0)
+    collect.add_argument("--embedding-model", required=True)
+    collect.add_argument("--expected-corpus-size", type=int, required=True)
+    collect.add_argument("--expected-snapshot-hash", required=True)
+    collect.add_argument("--overwrite", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "collect-runs":
+        try:
+            queries = load_queries(args.queries)
+            validate_methods(args.methods)
+        except (CollectorError, ValueError) as exc:
+            raise SystemExit(str(exc)) from None
+        if args.limit <= 0 or args.limit > 50:
+            raise SystemExit("--limit must be between 1 and 50")
+        if args.expected_corpus_size <= 0:
+            raise SystemExit("--expected-corpus-size must be positive")
+        if not math.isfinite(args.request_timeout) or args.request_timeout <= 0:
+            raise SystemExit("--request-timeout must be finite and positive")
+        if Path(args.output).exists() and not args.overwrite:
+            raise SystemExit(f"output already exists: {Path(args.output).name}")
+        database_url = os.getenv(args.database_url_env, "").strip()
+        api_token = os.getenv(args.api_token_env, "").strip()
+        if not database_url:
+            raise SystemExit(f"required database environment variable is not set: {args.database_url_env}")
+        if not api_token:
+            raise SystemExit(f"required API token environment variable is not set: {args.api_token_env}")
+        import psycopg2
+
+        service_client = EvaluationServiceClient(
+            embedding_service_url=args.embedding_service_url,
+            full_pipeline_url=args.full_pipeline_url,
+            api_token=api_token,
+            timeout_seconds=args.request_timeout,
+            expected_embedding_model=args.embedding_model,
+        )
+        try:
+            asyncio.run(
+                run_collection(
+                    queries=queries,
+                    methods=args.methods,
+                    limit=args.limit,
+                    output_path=args.output,
+                    connection_factory=lambda: psycopg2.connect(
+                        database_url,
+                        connect_timeout=max(1, min(int(args.request_timeout), 60)),
+                    ),
+                    expected_corpus_size=args.expected_corpus_size,
+                    expected_snapshot_hash=args.expected_snapshot_hash,
+                    embedding_model=args.embedding_model,
+                    service_client=service_client,
+                    overwrite=args.overwrite,
+                )
+            )
+        except CollectorError as exc:
+            raise SystemExit(str(exc)) from None
+        print(Path(args.output))
+        return 0
     if args.command == "candidate-pool":
         queries = load_queries(args.queries)
         query_texts = {query.query_id: query.text for query in queries}

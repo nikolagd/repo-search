@@ -30,6 +30,7 @@ from microservices.common.observability import (
 from microservices.common.schemas import HealthResponse, SearchRequest
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
+from microservices.search_service.vector_search import execute_vector_search
 
 app = FastAPI(title="Repo Search Search Service", version="0.1.0")
 setup_observability(app, "search-service")
@@ -220,44 +221,6 @@ def phrase_boost(title: str | None, abstract: str | None, phrases: list[str], ti
 
 
 def fetch_vector_results(query_vector: list[float], limit: int, year_from: int | None, year_to: int | None) -> list[tuple[Any, ...]]:
-    sql = """
-        WITH ranked AS (
-            SELECT id, repository_id, title, abstract, source_url, date,
-                   embedding <=> %s::vector AS cosine_distance
-            FROM publication
-            WHERE embedding IS NOT NULL
-    """
-    params: list[Any] = [query_vector]
-
-    if year_from is not None:
-        sql += " AND date >= %s"
-        params.append(f"{year_from}-01-01")
-
-    if year_to is not None:
-        sql += " AND date <= %s"
-        params.append(f"{year_to}-12-31")
-
-    sql += """
-            ORDER BY cosine_distance ASC
-            LIMIT %s
-        )
-        SELECT ranked.id, ranked.title, ranked.abstract, ranked.source_url, ranked.date,
-               ranked.cosine_distance, r.name,
-               COALESCE(
-                   ARRAY_AGG(a.full_name ORDER BY a.full_name)
-                       FILTER (WHERE a.full_name IS NOT NULL),
-                   '{}'
-               ) AS authors
-        FROM ranked
-        LEFT JOIN repository r ON r.id = ranked.repository_id
-        LEFT JOIN publication_author pa ON pa.publication_id = ranked.id
-        LEFT JOIN author a ON a.id = pa.author_id
-        GROUP BY ranked.id, ranked.title, ranked.abstract, ranked.source_url, ranked.date,
-                 ranked.cosine_distance, r.name
-        ORDER BY ranked.cosine_distance ASC
-    """
-    params.append(limit)
-
     with observe_retrieval_stage(
         "search-service",
         "vector_retrieval",
@@ -269,12 +232,10 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
     ) as span:
         conn = get_connection()
         try:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-                if span is not None:
-                    span.set_attribute("repo_search.result_candidates", len(rows))
-                return rows
+            rows = execute_vector_search(conn, query_vector, limit, year_from, year_to)
+            if span is not None:
+                span.set_attribute("repo_search.result_candidates", len(rows))
+            return rows
         finally:
             conn.close()
 

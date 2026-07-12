@@ -17,7 +17,20 @@ def write_json(path: str | Path, value: Any) -> None:
 
 
 def load_queries(path: str | Path) -> list[EvaluationQuery]:
-    queries = [EvaluationQuery(**row) for row in read_json(path)["queries"]]
+    payload = read_json(path)
+    if not isinstance(payload, dict) or not isinstance(payload.get("queries"), list):
+        raise ValueError("queries file must contain a queries array")
+    for row in payload["queries"]:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"query_id", "text"}
+            or not isinstance(row.get("query_id"), str)
+            or not row["query_id"].strip()
+            or not isinstance(row.get("text"), str)
+            or not row["text"].strip()
+        ):
+            raise ValueError("query_id and text must be non-empty strings")
+    queries = [EvaluationQuery(**row) for row in payload["queries"]]
     identifiers = [query.query_id for query in queries]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("duplicate query_id")
