@@ -11,13 +11,22 @@ class EvaluationQuery:
 
 
 @dataclass(frozen=True)
+class QueryMetadata:
+    query_id: str
+    language: str
+    script: str
+    category: str
+    topic: str
+
+
+@dataclass(frozen=True)
 class Judgment:
     query_id: str
     publication_id: str
     relevance: int
 
     def __post_init__(self) -> None:
-        if self.relevance not in {0, 1, 2}:
+        if type(self.relevance) is not int or self.relevance not in {0, 1, 2}:
             raise ValueError("relevance must be 0, 1, or 2")
 
 

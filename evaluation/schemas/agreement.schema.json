@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "metadata",
+    "pair_count",
+    "disagreement_count",
+    "exact_agreement_count",
+    "exact_agreement_percentage",
+    "unweighted_cohen_kappa",
+    "quadratic_weighted_cohen_kappa",
+    "confusion_matrix",
+    "disagreements"
+  ],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": [
+        "git_commit",
+        "evaluation_timestamp",
+        "input_sha256",
+        "grade_order",
+        "matrix_orientation",
+        "unweighted_kappa_formula",
+        "quadratic_weight",
+        "quadratic_kappa_formula",
+        "zero_denominator_policy"
+      ],
+      "properties": {
+        "git_commit": {"type": ["string", "null"]},
+        "evaluation_timestamp": {"type": "string", "minLength": 1},
+        "input_sha256": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        },
+        "grade_order": {"const": [0, 1, 2]},
+        "matrix_orientation": {"type": "string", "minLength": 1},
+        "unweighted_kappa_formula": {"type": "string", "minLength": 1},
+        "quadratic_weight": {"type": "string", "minLength": 1},
+        "quadratic_kappa_formula": {"type": "string", "minLength": 1},
+        "zero_denominator_policy": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "pair_count": {"type": "integer", "minimum": 1},
+    "disagreement_count": {"type": "integer", "minimum": 0},
+    "exact_agreement_count": {"type": "integer", "minimum": 0},
+    "exact_agreement_percentage": {"type": "number", "minimum": 0, "maximum": 100},
+    "unweighted_cohen_kappa": {"type": ["number", "null"]},
+    "quadratic_weighted_cohen_kappa": {"type": ["number", "null"]},
+    "confusion_matrix": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 3,
+        "items": {"type": "integer", "minimum": 0}
+      }
+    },
+    "disagreements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "query_id",
+          "publication_id",
+          "assessor_a_relevance",
+          "assessor_b_relevance"
+        ],
+        "properties": {
+          "query_id": {"type": "string", "minLength": 1},
+          "publication_id": {"type": "string", "minLength": 1},
+          "assessor_a_relevance": {"type": "integer", "enum": [0, 1, 2]},
+          "assessor_b_relevance": {"type": "integer", "enum": [0, 1, 2]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

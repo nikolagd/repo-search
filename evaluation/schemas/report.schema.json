@@ -1,13 +1,158 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["metadata", "aggregate_metrics", "per_query_metrics"],
+  "required": [
+    "metadata",
+    "aggregate_metrics",
+    "per_query_metrics",
+    "grouped_metrics",
+    "latency_summary",
+    "parser_mode_summary"
+  ],
   "properties": {
     "metadata": {
       "type": "object",
-      "required": ["git_commit", "evaluation_timestamp", "corpus_size", "query_count", "k_values", "embedding_model", "ranking_configuration", "parser_mode_counts"]
+      "required": [
+        "git_commit",
+        "evaluation_timestamp",
+        "corpus_size",
+        "query_count",
+        "methods",
+        "k_values",
+        "embedding_model",
+        "ranking_configuration",
+        "input_sha256",
+        "judgment_grade_counts",
+        "queries_without_positive_judgments",
+        "parser_mode_counts",
+        "validation_assumptions",
+        "latency_percentile_convention"
+      ],
+      "properties": {
+        "git_commit": {"type": "string", "minLength": 1},
+        "evaluation_timestamp": {"type": "string", "minLength": 1},
+        "corpus_size": {"type": "integer", "minimum": 1},
+        "query_count": {"type": "integer", "minimum": 1},
+        "methods": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "k_values": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "embedding_model": {"type": "string", "minLength": 1},
+        "ranking_configuration": {"type": "object"},
+        "input_sha256": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+        "judgment_grade_counts": {
+          "type": "object",
+          "required": ["0", "1", "2"],
+          "properties": {
+            "0": {"type": "integer", "minimum": 0},
+            "1": {"type": "integer", "minimum": 0},
+            "2": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "queries_without_positive_judgments": {"type": "integer", "minimum": 0},
+        "parser_mode_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "validation_assumptions": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "latency_percentile_convention": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
     },
-    "aggregate_metrics": {"type": "array"},
-    "per_query_metrics": {"type": "array"}
-  }
+    "aggregate_metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "evaluated_queries", "queries_without_relevant_judgments", "mean_latency_ms", "mrr"],
+        "properties": {
+          "method": {"type": "string", "minLength": 1},
+          "evaluated_queries": {"type": "integer", "minimum": 1},
+          "queries_without_relevant_judgments": {"type": "integer", "minimum": 0},
+          "mean_latency_ms": {"type": ["number", "null"], "minimum": 0},
+          "mrr": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "patternProperties": {"^(precision|recall|ndcg)@[1-9][0-9]*$": {"type": "number", "minimum": 0, "maximum": 1}},
+        "additionalProperties": false
+      }
+    },
+    "per_query_metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "query_id", "method", "language", "script", "category", "topic",
+          "retrieved_result_count", "positively_judged_document_count", "no_positive_judgments",
+          "latency_ms", "parser_mode", "judged_documents", "relevant_documents",
+          "has_relevant_judgments", "mrr"
+        ],
+        "properties": {
+          "query_id": {"type": "string", "minLength": 1},
+          "method": {"type": "string", "minLength": 1},
+          "language": {"type": "string", "pattern": "\\S"},
+          "script": {"type": "string", "pattern": "\\S"},
+          "category": {"type": "string", "pattern": "\\S"},
+          "topic": {"type": "string", "pattern": "\\S"},
+          "retrieved_result_count": {"type": "integer", "minimum": 0},
+          "positively_judged_document_count": {"type": "integer", "minimum": 0},
+          "no_positive_judgments": {"type": "boolean"},
+          "latency_ms": {"type": ["number", "null"], "minimum": 0},
+          "parser_mode": {"type": ["string", "null"]},
+          "judged_documents": {"type": "integer", "minimum": 0},
+          "relevant_documents": {"type": "integer", "minimum": 0},
+          "has_relevant_judgments": {"type": "boolean"},
+          "mrr": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "patternProperties": {"^(precision|recall|ndcg)@[1-9][0-9]*$": {"type": "number", "minimum": 0, "maximum": 1}},
+        "additionalProperties": false
+      }
+    },
+    "grouped_metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "grouping_dimension", "group_value", "query_count", "queries_without_positive_judgments", "mrr"],
+        "properties": {
+          "method": {"type": "string", "minLength": 1},
+          "grouping_dimension": {"enum": ["language", "script", "category"]},
+          "group_value": {"type": "string", "pattern": "\\S"},
+          "query_count": {"type": "integer", "minimum": 1},
+          "queries_without_positive_judgments": {"type": "integer", "minimum": 0},
+          "mrr": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "patternProperties": {"^(precision|recall|ndcg)@[1-9][0-9]*$": {"type": "number", "minimum": 0, "maximum": 1}},
+        "additionalProperties": false
+      }
+    },
+    "latency_summary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "run_count", "measured_run_count", "missing_latency_count", "mean_ms", "median_ms", "minimum_ms", "maximum_ms", "p95_ms"],
+        "properties": {
+          "method": {"type": "string", "minLength": 1},
+          "run_count": {"type": "integer", "minimum": 1},
+          "measured_run_count": {"type": "integer", "minimum": 0},
+          "missing_latency_count": {"type": "integer", "minimum": 0},
+          "mean_ms": {"type": ["number", "null"], "minimum": 0},
+          "median_ms": {"type": ["number", "null"], "minimum": 0},
+          "minimum_ms": {"type": ["number", "null"], "minimum": 0},
+          "maximum_ms": {"type": ["number", "null"], "minimum": 0},
+          "p95_ms": {"type": ["number", "null"], "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    },
+    "parser_mode_summary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "parser_mode", "applicability", "run_count", "percentage"],
+        "properties": {
+          "method": {"type": "string", "minLength": 1},
+          "parser_mode": {"type": ["string", "null"]},
+          "applicability": {"enum": ["not_applicable", "reported", "unreported"]},
+          "run_count": {"type": "integer", "minimum": 1},
+          "percentage": {"type": "number", "minimum": 0, "maximum": 100}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
 }

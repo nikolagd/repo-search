@@ -5,6 +5,7 @@ import pytest
 
 import evaluation.cli as cli_module
 from evaluation.cli import main
+from evaluation.judgment_import import POOL_COLUMNS
 
 
 def _write(path, value) -> None:
@@ -38,11 +39,26 @@ def _pool_inputs(tmp_path, *, methods=("keyword", "vector_only", "full_pipeline"
 def test_candidate_pool_and_report_commands_write_machine_readable_outputs(tmp_path) -> None:
     queries = tmp_path / "queries.json"
     judgments = tmp_path / "judgments.json"
+    query_metadata = tmp_path / "query-metadata.json"
     runs = tmp_path / "runs.json"
     candidates = tmp_path / "candidates.csv"
     report_dir = tmp_path / "report"
     _write(queries, {"queries": [{"query_id": "q1", "text": "synthetic query"}]})
     _write(judgments, {"judgments": [{"query_id": "q1", "publication_id": "d1", "relevance": 2}]})
+    _write(
+        query_metadata,
+        {
+            "query_metadata": [
+                {
+                    "query_id": "q1",
+                    "language": "sr",
+                    "script": "latin",
+                    "category": "synthetic",
+                    "topic": "synthetic topic",
+                }
+            ]
+        },
+    )
     _write(
         runs,
         {
@@ -116,6 +132,8 @@ def test_candidate_pool_and_report_commands_write_machine_readable_outputs(tmp_p
                 str(queries),
                 "--judgments",
                 str(judgments),
+                "--query-metadata",
+                str(query_metadata),
                 "--runs",
                 str(runs),
                 "--output-dir",
@@ -137,6 +155,100 @@ def test_candidate_pool_and_report_commands_write_machine_readable_outputs(tmp_p
     report = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
     assert report["metadata"]["git_commit"] == "test-commit"
     assert report["metadata"]["query_count"] == 1
+
+
+def test_import_judgments_and_agreement_commands_write_validated_outputs(tmp_path) -> None:
+    queries = tmp_path / "queries.json"
+    template = tmp_path / "template.csv"
+    assessment = tmp_path / "assessment.csv"
+    judgments = tmp_path / "judgments.json"
+    _write(queries, {"queries": [{"query_id": "q1", "text": "veštačka inteligencija"}]})
+    candidate = {
+        "candidate_id": "q1-C0001",
+        "query_text": "veštačka inteligencija",
+        "query_id": "q1",
+        "publication_id": "d1",
+        "title": "Veštačka inteligencija",
+        "abstract": "Sadržaj",
+        "source_url": "https://example.test/d1",
+        "relevance": "",
+    }
+    for path, grade in ((template, ""), (assessment, "2")):
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(POOL_COLUMNS), lineterminator="\n")
+            writer.writeheader()
+            writer.writerow({**candidate, "relevance": grade})
+
+    assert main(
+        [
+            "import-judgments",
+            "--queries",
+            str(queries),
+            "--pool-template",
+            str(template),
+            "--assessment",
+            str(assessment),
+            "--output",
+            str(judgments),
+        ]
+    ) == 0
+    assert json.loads(judgments.read_text(encoding="utf-8"))["judgments"][0]["relevance"] == 2
+
+    judgments_b = tmp_path / "judgments-b.json"
+    judgments_b.write_bytes(judgments.read_bytes())
+    agreement = tmp_path / "agreement"
+    assert main(
+        [
+            "agreement",
+            "--judgments-a",
+            str(judgments),
+            "--judgments-b",
+            str(judgments_b),
+            "--output-dir",
+            str(agreement),
+        ]
+    ) == 0
+    assert json.loads((agreement / "agreement.json").read_text(encoding="utf-8"))[
+        "exact_agreement_percentage"
+    ] == 100.0
+
+    with pytest.raises(ValueError, match="distinct source files"):
+        main(
+            [
+                "agreement",
+                "--judgments-a",
+                str(judgments),
+                "--judgments-b",
+                str(judgments),
+                "--output-dir",
+                str(tmp_path / "same-file"),
+            ]
+        )
+
+
+def test_agreement_output_directory_cannot_contain_source_judgments(tmp_path) -> None:
+    output = tmp_path / "agreement"
+    output.mkdir()
+    source_a = output / "a.json"
+    source_b = output / "b.json"
+    payload = {"judgments": [{"query_id": "q1", "publication_id": "d1", "relevance": 1}]}
+    _write(source_a, payload)
+    _write(source_b, payload)
+
+    with pytest.raises(ValueError, match="contain an input"):
+        main(
+            [
+                "agreement",
+                "--judgments-a",
+                str(source_a),
+                "--judgments-b",
+                str(source_b),
+                "--output-dir",
+                str(output),
+                "--overwrite",
+            ]
+        )
+    assert source_a.is_file() and source_b.is_file()
 
 
 def test_candidate_pool_accepts_complete_matrix_including_empty_runs(tmp_path) -> None:

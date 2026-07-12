@@ -3,7 +3,7 @@ import json
 import pytest
 
 from evaluation.io import load_judgments, load_queries, load_runs, validate_comparison_matrix
-from evaluation.models import Judgment, QueryRun
+from evaluation.models import Judgment, QueryMetadata, QueryRun
 from evaluation.reporting import build_report
 
 
@@ -44,9 +44,12 @@ def test_zero_result_runs_remain_in_equal_macro_query_counts(tmp_path) -> None:
     report = build_report(
         runs,
         [Judgment("q1", "d1", 2)],
+        [
+            QueryMetadata("q1", "sr", "latin", "category", "topic 1"),
+            QueryMetadata("q2", "sr", "latin", "category", "topic 2"),
+        ],
         git_commit="abc",
         corpus_size=10,
-        query_count=2,
         k_values=[1],
         embedding_model="model",
         ranking_configuration={},
@@ -89,6 +92,16 @@ def test_duplicate_or_conflicting_judgments_fail(tmp_path) -> None:
         },
     )
     with pytest.raises(ValueError, match="duplicate judgment"):
+        load_judgments(path, {"q1"})
+
+
+@pytest.mark.parametrize("relevance", [True, 1.0, "1"])
+def test_judgment_loader_rejects_non_integer_grades(tmp_path, relevance) -> None:
+    path = _write(
+        tmp_path / "judgments.json",
+        {"judgments": [{"query_id": "q1", "publication_id": "d1", "relevance": relevance}]},
+    )
+    with pytest.raises(ValueError, match="integer relevance|relevance"):
         load_judgments(path, {"q1"})
 
 
