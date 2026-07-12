@@ -9,7 +9,18 @@ import os
 import subprocess
 from pathlib import Path
 
-from evaluation.io import load_judgments, load_queries, load_runs, validate_comparison_matrix, write_json
+from evaluation.agreement import compare_judgments, write_agreement_report
+from evaluation.io import (
+    load_judgments,
+    load_queries,
+    load_query_metadata,
+    load_runs,
+    sha256_file,
+    validate_comparison_matrix,
+    write_json,
+)
+from evaluation.judgment_import import POOL_COLUMNS
+from evaluation.judgment_import import import_judgments
 from evaluation.collector import CollectorError, EvaluationServiceClient, run_collection, validate_methods
 from evaluation.pooling import build_candidate_pool
 from evaluation.reporting import build_report, write_report
@@ -26,22 +37,35 @@ def _git_commit() -> str:
 
 def _write_candidates(path: Path, candidates: list[dict]) -> None:
     if path.suffix.lower() == ".csv":
-        fieldnames = [
-            "candidate_id",
-            "query_text",
-            "query_id",
-            "publication_id",
-            "title",
-            "abstract",
-            "source_url",
-            "relevance",
-        ]
+        fieldnames = list(POOL_COLUMNS)
         with path.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(candidates)
     else:
         write_json(path, {"candidates": candidates})
+
+
+def _reject_output_alias(
+    output: str | Path,
+    inputs: list[str | Path],
+    *,
+    output_is_directory: bool = False,
+) -> None:
+    resolved_output = Path(output).resolve()
+    for input_path in inputs:
+        resolved_input = Path(input_path).resolve()
+        if resolved_output == resolved_input or (
+            output_is_directory and resolved_output in resolved_input.parents
+        ):
+            raise ValueError("output path must not replace or contain an input file")
+
+
+def _validate_evaluation_methods(methods: list[str]) -> None:
+    try:
+        validate_methods(methods)
+    except CollectorError as exc:
+        raise ValueError(str(exc)) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = commands.add_parser("report", help="calculate metrics and write JSON, CSV, and Markdown")
     report.add_argument("--queries", required=True)
+    report.add_argument("--query-metadata", required=True)
     report.add_argument("--judgments", required=True)
     report.add_argument("--runs", required=True)
     report.add_argument("--output-dir", required=True)
@@ -67,6 +92,22 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
     report.add_argument("--ranking-config", default="{}", help="JSON object or path to a JSON file")
     report.add_argument("--git-commit")
+    report.add_argument("--overwrite", action="store_true")
+
+    import_command = commands.add_parser(
+        "import-judgments", help="validate a completed blinded assessment and write judgments JSON"
+    )
+    import_command.add_argument("--queries", required=True)
+    import_command.add_argument("--pool-template", required=True)
+    import_command.add_argument("--assessment", required=True)
+    import_command.add_argument("--output", required=True)
+    import_command.add_argument("--overwrite", action="store_true")
+
+    agreement = commands.add_parser("agreement", help="compare two assessor judgment files")
+    agreement.add_argument("--judgments-a", required=True)
+    agreement.add_argument("--judgments-b", required=True)
+    agreement.add_argument("--output-dir", required=True)
+    agreement.add_argument("--overwrite", action="store_true")
 
     collect = commands.add_parser("collect-runs", help="collect keyword, vector-only, and full-pipeline runs")
     collect.add_argument("--queries", required=True)
@@ -138,9 +179,42 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(str(exc)) from None
         print(Path(args.output))
         return 0
+    if args.command == "import-judgments":
+        inputs = [Path(args.queries), Path(args.pool_template), Path(args.assessment)]
+        _reject_output_alias(args.output, inputs)
+        import_judgments(
+            load_queries(args.queries),
+            args.pool_template,
+            args.assessment,
+            args.output,
+            overwrite=args.overwrite,
+        )
+        return 0
+    if args.command == "agreement":
+        if Path(args.judgments_a).resolve() == Path(args.judgments_b).resolve():
+            raise ValueError("assessor A and assessor B must be distinct source files")
+        _reject_output_alias(
+            args.output_dir,
+            [args.judgments_a, args.judgments_b],
+            output_is_directory=True,
+        )
+        judgments_a = load_judgments(args.judgments_a)
+        judgments_b = load_judgments(args.judgments_b)
+        report = compare_judgments(
+            judgments_a,
+            judgments_b,
+            git_commit=_git_commit(),
+            input_sha256={
+                "judgments_a": sha256_file(args.judgments_a),
+                "judgments_b": sha256_file(args.judgments_b),
+            },
+        )
+        write_agreement_report(args.output_dir, report, overwrite=args.overwrite)
+        return 0
     if args.command == "candidate-pool":
         queries = load_queries(args.queries)
         query_texts = {query.query_id: query.text for query in queries}
+        _validate_evaluation_methods(args.methods)
         expected_methods = set(args.methods)
         if len(expected_methods) != len(args.methods):
             raise ValueError("expected methods must be unique")
@@ -154,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
 
     queries = load_queries(args.queries)
     query_ids = {query.query_id for query in queries}
+    query_metadata = load_query_metadata(args.query_metadata, query_ids)
+    _validate_evaluation_methods(args.methods)
     expected_methods = set(args.methods)
     if len(expected_methods) != len(args.methods):
         raise ValueError("expected methods must be unique")
@@ -168,12 +244,27 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         runs,
         load_judgments(args.judgments, query_ids),
+        query_metadata,
         git_commit=args.git_commit or _git_commit(),
         corpus_size=args.corpus_size,
-        query_count=len(queries),
         k_values=args.k,
         embedding_model=args.embedding_model,
         ranking_configuration=ranking_config,
+        input_sha256={
+            "queries": sha256_file(args.queries),
+            "query_metadata": sha256_file(args.query_metadata),
+            "judgments": sha256_file(args.judgments),
+            "runs": sha256_file(args.runs),
+            **(
+                {"ranking_configuration": sha256_file(ranking_argument)}
+                if ranking_argument.is_file()
+                else {}
+            ),
+        },
     )
-    write_report(args.output_dir, report)
+    report_inputs = [args.queries, args.query_metadata, args.judgments, args.runs]
+    if ranking_argument.is_file():
+        report_inputs.append(ranking_argument)
+    _reject_output_alias(args.output_dir, report_inputs, output_is_directory=True)
+    write_report(args.output_dir, report, overwrite=args.overwrite)
     return 0

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["query_metadata"],
+  "properties": {
+    "query_metadata": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["query_id", "language", "script", "category", "topic"],
+        "properties": {
+          "query_id": {"type": "string", "pattern": "\\S"},
+          "language": {"type": "string", "pattern": "\\S"},
+          "script": {"type": "string", "pattern": "\\S"},
+          "category": {"type": "string", "pattern": "\\S"},
+          "topic": {"type": "string", "pattern": "\\S"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
