@@ -15,11 +15,9 @@ from microservices.job_service import main as job_service
 from microservices.workers import job_worker
 
 
-def oai_page(identifier: str, title: str, author: str, *, token: str | None = None) -> str:
-    token_xml = f"<resumptionToken>{token}</resumptionToken>" if token else ""
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
-  <ListRecords>
+def valid_record(identifier: str, title: str, author: str) -> str:
+    source_suffix = identifier.rsplit(":", 1)[-1]
+    return f"""
     <record>
       <header><identifier>{identifier}</identifier></header>
       <metadata>
@@ -29,10 +27,19 @@ def oai_page(identifier: str, title: str, author: str, *, token: str | None = No
           <dc:creator>{author}</dc:creator>
           <dc:date>2024-02-29</dc:date>
           <dc:description>{title} abstract</dc:description>
-          <dc:identifier>https://example.test/{identifier.rsplit(':', 1)[-1]}</dc:identifier>
+          <dc:identifier>https://example.test/{source_suffix}</dc:identifier>
         </oai_dc:dc>
       </metadata>
     </record>
+    """
+
+
+def oai_page(records: list[str], *, token: str | None = None) -> str:
+    token_xml = f"<resumptionToken>{token}</resumptionToken>" if token else ""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <ListRecords>
+    {''.join(records)}
     {token_xml}
   </ListRecords>
 </OAI-PMH>"""
@@ -41,8 +48,26 @@ def oai_page(identifier: str, title: str, author: str, *, token: str | None = No
 @pytest.fixture
 def fake_oai_repository():
     requests_seen: list[dict[str, list[str]]] = []
-    first_page = oai_page("oai:synthetic:1", "First title", "Alice Author", token="page-two")
-    second_page = oai_page("oai:synthetic:2", "Second title", "Bob Author")
+    first_page = oai_page(
+        [
+            valid_record("oai:synthetic:1", "First title", "Alice Author"),
+            "<record><header status=\"deleted\"><identifier>oai:synthetic:deleted</identifier></header></record>",
+            """<record><header/><metadata>
+                <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+                    xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Missing identity</dc:title></oai_dc:dc>
+            </metadata></record>""",
+        ],
+        token="page-two",
+    )
+    second_page = oai_page(
+        [
+            valid_record("oai:synthetic:2", "Second title", "Bob Author"),
+            """<record><header><identifier>oai:synthetic:empty</identifier></header><metadata>
+                <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+                    xmlns:dc="http://purl.org/dc/elements/1.1/"/>
+            </metadata></record>""",
+        ]
+    )
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - HTTP handler API
@@ -182,10 +207,19 @@ def test_two_page_worker_harvest_persists_catalog_and_completes_job_idempotently
             cursor.execute("SELECT COUNT(*) FROM repository WHERE id = %s AND last_harvest IS NOT NULL", (repository_id,))
             assert cursor.fetchone()[0] == 1
             cursor.execute(
-                "SELECT status, processed_records, lease_token FROM admin_job WHERE id = ANY(%s) ORDER BY id",
+                """
+                SELECT status, processed_records, received_records, parsed_records,
+                       skipped_records, deleted_records, pages_processed, lease_token
+                FROM admin_job
+                WHERE id = ANY(%s)
+                ORDER BY id
+                """,
                 (completed_job_ids,),
             )
-            assert cursor.fetchall() == [("succeeded", 2, None), ("succeeded", 2, None)]
+            assert cursor.fetchall() == [
+                ("succeeded", 2, 5, 2, 2, 1, 2, None),
+                ("succeeded", 2, 5, 2, 2, 1, 2, None),
+            ]
     finally:
         connection.close()
 

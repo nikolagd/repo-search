@@ -35,6 +35,11 @@ def test_job_response_preserves_existing_fields_and_adds_reliability_data() -> N
         "message": "Job started.",
         "attempt_count": 2,
         "heartbeat_at": "2026-07-11T10:01:00",
+        "received_records": None,
+        "parsed_records": None,
+        "skipped_records": None,
+        "deleted_records": None,
+        "pages_processed": None,
     }
 
 
@@ -54,3 +59,37 @@ def test_job_response_accepts_legacy_row_shape() -> None:
 
     assert job["attempt_count"] == 0
     assert job["heartbeat_at"] is None
+    assert job["received_records"] is None
+    assert job["parsed_records"] is None
+    assert job["skipped_records"] is None
+    assert job["deleted_records"] is None
+    assert job["pages_processed"] is None
+
+
+def test_job_response_exposes_harvest_statistics_without_changing_existing_fields() -> None:
+    job = job_from_row(
+        (
+            3,
+            "repository_harvest",
+            9,
+            "succeeded",
+            datetime(2026, 7, 11, 12, 0, 0),
+            datetime(2026, 7, 11, 12, 1, 0),
+            7,
+            "Harvest completed.",
+            1,
+            None,
+            10,
+            7,
+            2,
+            1,
+            3,
+        )
+    )
+
+    assert job["processed_records"] == 7
+    assert job["received_records"] == 10
+    assert job["parsed_records"] == 7
+    assert job["skipped_records"] == 2
+    assert job["deleted_records"] == 1
+    assert job["pages_processed"] == 3

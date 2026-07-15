@@ -76,7 +76,9 @@ def read_job(connection_factory: Callable[[], Any], job_id: int) -> dict[str, An
             cursor.execute(
                 """
                 SELECT status, attempt_count, heartbeat_at, lease_token,
-                       finished_at, processed_records, message
+                       finished_at, processed_records, message,
+                       received_records, parsed_records, skipped_records,
+                       deleted_records, pages_processed
                 FROM admin_job
                 WHERE id = %s
                 """,
@@ -91,6 +93,11 @@ def read_job(connection_factory: Callable[[], Any], job_id: int) -> dict[str, An
             "finished_at": row[4],
             "processed_records": row[5],
             "message": row[6],
+            "received_records": row[7],
+            "parsed_records": row[8],
+            "skipped_records": row[9],
+            "deleted_records": row[10],
+            "pages_processed": row[11],
         }
     finally:
         connection.close()
@@ -132,18 +139,21 @@ def test_ensure_schema_upgrades_legacy_admin_job_table(
 
     monkeypatch.setattr(job_service, "get_connection", postgres_connection_factory)
     job_service.ensure_schema()
+    job_service.ensure_schema()
 
     connection = postgres_connection_factory()
     try:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT attempt_count, heartbeat_at, lease_token
+                SELECT attempt_count, heartbeat_at, lease_token,
+                       received_records, parsed_records, skipped_records,
+                       deleted_records, pages_processed
                 FROM admin_job
                 WHERE message = 'legacy row'
                 """
             )
-            assert cursor.fetchone() == (0, None, None)
+            assert cursor.fetchone() == (0, None, None, None, None, None, None, None)
     finally:
         connection.close()
 
@@ -273,6 +283,14 @@ def test_successful_completion_clears_lease_state(job_database: Callable[[], Any
         "succeeded",
         12,
         "completed",
+        harvest_statistics=job_worker.HarvestStatistics(
+            received_records=15,
+            parsed_records=12,
+            skipped_records=2,
+            deleted_records=1,
+            processed_records=12,
+            pages_processed=3,
+        ),
     ) is True
 
     job = read_job(job_database, job_id)
@@ -280,6 +298,11 @@ def test_successful_completion_clears_lease_state(job_database: Callable[[], Any
     assert job["heartbeat_at"] is None
     assert job["lease_token"] is None
     assert job["processed_records"] == 12
+    assert job["received_records"] == 15
+    assert job["parsed_records"] == 12
+    assert job["skipped_records"] == 2
+    assert job["deleted_records"] == 1
+    assert job["pages_processed"] == 3
 
 
 def test_transient_failure_requeues_and_next_claim_increments_attempt(
@@ -300,6 +323,70 @@ def test_transient_failure_requeues_and_next_claim_increments_attempt(
     assert second_claim is not None
     assert second_claim["id"] == job_id
     assert second_claim["attempt_count"] == 2
+
+
+def test_retry_resets_statistics_and_absolute_updates_do_not_double_counts(
+    job_database: Callable[[], Any],
+) -> None:
+    job_id = insert_job(job_database)
+    first_claim = job_worker.claim_next_job(max_attempts=3)
+    assert first_claim is not None
+    first_attempt = job_worker.HarvestStatistics(
+        received_records=9,
+        parsed_records=6,
+        skipped_records=2,
+        deleted_records=1,
+        processed_records=5,
+        pages_processed=2,
+    )
+    assert job_worker.update_harvest_statistics(
+        job_id,
+        first_claim["lease_token"],
+        first_attempt,
+    ) is True
+    assert job_worker.fail_or_requeue_job(
+        first_claim,
+        "temporary timeout",
+        retryable=True,
+        max_attempts=3,
+    ) == "queued"
+
+    second_claim = job_worker.claim_next_job(max_attempts=3)
+    assert second_claim is not None
+    reset_job = read_job(job_database, job_id)
+    assert reset_job["processed_records"] == 0
+    assert reset_job["received_records"] == 0
+    assert reset_job["parsed_records"] == 0
+    assert reset_job["skipped_records"] == 0
+    assert reset_job["deleted_records"] == 0
+    assert reset_job["pages_processed"] == 0
+
+    latest_attempt = job_worker.HarvestStatistics(
+        received_records=4,
+        parsed_records=2,
+        skipped_records=1,
+        deleted_records=1,
+        processed_records=2,
+        pages_processed=1,
+    )
+    assert job_worker.update_harvest_statistics(
+        job_id,
+        second_claim["lease_token"],
+        latest_attempt,
+    ) is True
+    assert job_worker.update_harvest_statistics(
+        job_id,
+        second_claim["lease_token"],
+        latest_attempt,
+    ) is True
+
+    job = read_job(job_database, job_id)
+    assert job["processed_records"] == 2
+    assert job["received_records"] == 4
+    assert job["parsed_records"] == 2
+    assert job["skipped_records"] == 1
+    assert job["deleted_records"] == 1
+    assert job["pages_processed"] == 1
 
 
 def test_final_execution_failure_becomes_failed(job_database: Callable[[], Any]) -> None:
@@ -346,16 +433,50 @@ def test_old_lease_owner_cannot_overwrite_reassigned_job(job_database: Callable[
     assert new_claim is not None
     assert new_claim["lease_token"] != old_claim["lease_token"]
 
+    new_statistics = job_worker.HarvestStatistics(
+        received_records=3,
+        parsed_records=2,
+        skipped_records=1,
+        processed_records=2,
+        pages_processed=1,
+    )
+    assert job_worker.update_harvest_statistics(
+        job_id,
+        new_claim["lease_token"],
+        new_statistics,
+    ) is True
+    assert job_worker.update_harvest_statistics(
+        job_id,
+        old_claim["lease_token"],
+        job_worker.HarvestStatistics(
+            received_records=99,
+            parsed_records=99,
+            processed_records=99,
+            pages_processed=99,
+        ),
+    ) is False
+
     assert job_worker.finish_job(
         job_id,
         old_claim["lease_token"],
         "succeeded",
         99,
         "old worker completed",
+        harvest_statistics=job_worker.HarvestStatistics(
+            received_records=99,
+            parsed_records=99,
+            processed_records=99,
+            pages_processed=99,
+        ),
     ) is False
     job = read_job(job_database, job_id)
     assert job["status"] == "running"
     assert job["lease_token"] == new_claim["lease_token"]
+    assert job["received_records"] == 3
+    assert job["parsed_records"] == 2
+    assert job["skipped_records"] == 1
+    assert job["processed_records"] == 2
+    assert job["pages_processed"] == 1
 
 
 def test_existing_duplicate_active_job_constraints_remain(

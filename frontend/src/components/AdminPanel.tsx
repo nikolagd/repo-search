@@ -261,9 +261,26 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
   }
 
   function renderJobStatus(job: HarvestJob) {
+    const showHarvestStatistics =
+      job.job_type === "repository_harvest" && job.received_records != null;
+
     return (
       <div className={`harvest-status ${job.status}`}>
-        <span>{job.message}</span>
+        <div className="harvest-status-content">
+          <span>{job.message}</span>
+          {showHarvestStatistics && (
+            <div className="harvest-statistics">
+              <span>Received {job.received_records}</span>
+              <span>Parsed {job.parsed_records ?? 0}</span>
+              <span>Skipped {job.skipped_records ?? 0}</span>
+              <span title="Deleted OAI headers are counted; local publications are not deleted.">
+                Deleted {job.deleted_records ?? 0}
+              </span>
+              <span>Persisted {job.processed_records ?? 0}</span>
+              <span>Pages {job.pages_processed ?? 0}</span>
+            </div>
+          )}
+        </div>
         {job.status !== "running" && job.id && (
           <button
             className="status-dismiss"
