@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from threading import Event
 from typing import Any
 
@@ -137,7 +138,11 @@ def test_run_job_records_lease_lost_observability(
     monkeypatch.setattr(
         job_worker,
         "execute_job",
-        lambda _job: (3, "job.embedding_backfill_completed", "completed"),
+        lambda _job: job_worker.JobExecutionResult(
+            processed_records=3,
+            completion_event="job.embedding_backfill_completed",
+            completion_message="completed",
+        ),
     )
 
     if finish_result is None:
@@ -243,6 +248,97 @@ def test_sync_publication_persists_embedding_and_provenance(monkeypatch: pytest.
     job_worker.sync_publication_to_search({"id": 4, "title": "Title", "abstract": "Abstract"})
 
     assert calls[1][2] == provenance
+
+
+def test_harvest_accumulates_absolute_statistics_over_multiple_pages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page_one = """<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+      <ListRecords>
+        <record>
+          <header><identifier>oai:test:1</identifier></header>
+          <metadata><oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+            xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>First</dc:title></oai_dc:dc></metadata>
+        </record>
+        <record><header status="deleted"><identifier>oai:test:deleted</identifier></header></record>
+        <resumptionToken completeListSize="100">page-two</resumptionToken>
+      </ListRecords>
+    </OAI-PMH>"""
+    page_two = """<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+      <ListRecords>
+        <record>
+          <header><identifier>oai:test:2</identifier></header>
+          <metadata><oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+            xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Second</dc:title></oai_dc:dc></metadata>
+        </record>
+        <record>
+          <header/>
+          <metadata><oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+            xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Missing identifier</dc:title></oai_dc:dc></metadata>
+        </record>
+        <record>
+          <header><identifier>oai:test:empty</identifier></header>
+          <metadata><oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+            xmlns:dc="http://purl.org/dc/elements/1.1/"/></metadata>
+        </record>
+      </ListRecords>
+    </OAI-PMH>"""
+    fetched_tokens: list[str | None] = []
+    persisted_identifiers: list[str] = []
+    updates: list[job_worker.HarvestStatistics] = []
+
+    def fetch(resumption_token=None, **_kwargs):
+        fetched_tokens.append(resumption_token)
+        return page_two if resumption_token == "page-two" else page_one
+
+    def request(method: str, url: str, **kwargs):
+        if method == "GET" and url.endswith("/repositories/5"):
+            return {
+                "id": 5,
+                "name": "Synthetic",
+                "oai_endpoint": "https://example.test/oai",
+                "last_harvest": None,
+            }
+        if method == "POST" and url.endswith("/publications"):
+            persisted_identifiers.append(kwargs["json"]["oai_identifier"])
+            return {"id": len(persisted_identifiers)}
+        if method == "POST" and url.endswith("/repositories/5/last-harvest"):
+            return {"status": "ok"}
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+    def update(_job_id: int, _lease_token: str, statistics: job_worker.HarvestStatistics) -> bool:
+        updates.append(job_worker.HarvestStatistics(**vars(statistics)))
+        return True
+
+    monkeypatch.setattr(job_worker, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(job_worker, "get_granularity", lambda **_kwargs: "YYYY-MM-DD")
+    monkeypatch.setattr(job_worker, "choose_metadata_prefix", lambda **_kwargs: "oai_dc")
+    monkeypatch.setattr(job_worker, "fetch_page", fetch)
+    monkeypatch.setattr(job_worker, "request_json", request)
+    monkeypatch.setattr(job_worker, "sync_publication_to_search", lambda _publication: None)
+    monkeypatch.setattr(job_worker, "update_harvest_statistics", update)
+    monkeypatch.setattr(job_worker, "trace_span", lambda *_args, **_kwargs: nullcontext(None))
+    monkeypatch.setattr(job_worker, "emit_app_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_worker, "record_harvest_records", lambda *_args, **_kwargs: None)
+
+    statistics = job_worker.harvest_repository(
+        {"id": 12, "repository_id": 5, "lease_token": "lease-12"}
+    )
+
+    assert statistics == job_worker.HarvestStatistics(
+        received_records=5,
+        parsed_records=2,
+        skipped_records=2,
+        deleted_records=1,
+        processed_records=2,
+        pages_processed=2,
+    )
+    assert fetched_tokens == [None, "page-two"]
+    assert persisted_identifiers == ["oai:test:1", "oai:test:2"]
+    assert updates[-1] == statistics
+    assert [update.pages_processed for update in updates] == [1, 1, 2, 2]
+    assert [update.processed_records for update in updates] == [0, 1, 1, 2]
 
 
 def test_backfill_skips_current_and_regenerates_missing_or_stale(

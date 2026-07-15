@@ -53,6 +53,11 @@ def job_from_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
         "message": row[7],
         "attempt_count": row[8] if len(row) > 8 else 0,
         "heartbeat_at": serialize_datetime(row[9]) if len(row) > 9 else None,
+        "received_records": row[10] if len(row) > 10 else None,
+        "parsed_records": row[11] if len(row) > 11 else None,
+        "skipped_records": row[12] if len(row) > 12 else None,
+        "deleted_records": row[13] if len(row) > 13 else None,
+        "pages_processed": row[14] if len(row) > 14 else None,
     }
 
 
@@ -125,6 +130,11 @@ def ensure_schema() -> None:
                     started_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
                     finished_at TIMESTAMP WITHOUT TIME ZONE,
                     processed_records INTEGER,
+                    received_records INTEGER,
+                    parsed_records INTEGER,
+                    skipped_records INTEGER,
+                    deleted_records INTEGER,
+                    pages_processed INTEGER,
                     message TEXT NOT NULL,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     heartbeat_at TIMESTAMP WITHOUT TIME ZONE,
@@ -144,6 +154,16 @@ def ensure_schema() -> None:
                     ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP WITHOUT TIME ZONE;
                 ALTER TABLE admin_job
                     ADD COLUMN IF NOT EXISTS lease_token TEXT;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS received_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS parsed_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS skipped_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS deleted_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS pages_processed INTEGER;
 
                 UPDATE admin_job
                 SET attempt_count = 0
@@ -219,7 +239,9 @@ def jobs(
 
     sql = """
         SELECT id, job_type, repository_id, status, started_at, finished_at,
-               processed_records, message, attempt_count, heartbeat_at
+               processed_records, message, attempt_count, heartbeat_at,
+               received_records, parsed_records, skipped_records,
+               deleted_records, pages_processed
         FROM admin_job
     """
 
@@ -263,7 +285,9 @@ def create_job(job_type: str, repository_id: int | None, message: str) -> dict[s
                 INSERT INTO admin_job (job_type, repository_id, status, message)
                 VALUES (%s, %s, 'queued', %s)
                 RETURNING id, job_type, repository_id, status, started_at, finished_at,
-                          processed_records, message, attempt_count, heartbeat_at
+                          processed_records, message, attempt_count, heartbeat_at,
+                          received_records, parsed_records, skipped_records,
+                          deleted_records, pages_processed
                 """,
                 (job_type, repository_id, message),
             )

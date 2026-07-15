@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from microservices.workers.parser import parse_oai_xml, pick_date_only, pick_valid_date
+from microservices.workers.parser import parse_oai_page, parse_oai_xml, pick_date_only, pick_valid_date
 
 
 OAI_DC_METADATA = """
@@ -225,6 +225,41 @@ def test_record_without_identifier_is_skipped_without_losing_valid_page_records(
     assert len(records) == 1
     assert records[0]["oai_identifier"] == "oai:test:valid"
     assert records[0]["title"] == "OAI DC title"
+
+
+def test_page_outcomes_count_actual_valid_deleted_missing_identifier_and_empty_metadata_records() -> None:
+    xml_text = f"""<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+      <ListRecords>
+        <record>
+          <header><identifier>oai:test:valid</identifier></header>
+          <metadata>{OAI_DC_METADATA}</metadata>
+        </record>
+        <record>
+          <header status="deleted"><identifier>oai:test:deleted</identifier></header>
+        </record>
+        <record>
+          <header/>
+          <metadata>{OAI_DC_METADATA}</metadata>
+        </record>
+        <record>
+          <header><identifier>oai:test:empty</identifier></header>
+          <metadata>
+            <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+                       xmlns:dc="http://purl.org/dc/elements/1.1/"/>
+          </metadata>
+        </record>
+        <resumptionToken completeListSize="999">next-page</resumptionToken>
+      </ListRecords>
+    </OAI-PMH>"""
+
+    page = parse_oai_page(xml_text, "oai_dc")
+
+    assert [record["oai_identifier"] for record in page.records] == ["oai:test:valid"]
+    assert page.resumption_token == "next-page"
+    assert page.received_records == 4
+    assert page.parsed_records == 1
+    assert page.skipped_records == 2
+    assert page.deleted_records == 1
 
 
 @pytest.mark.parametrize(

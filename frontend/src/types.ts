@@ -84,6 +84,11 @@ export interface HarvestJob {
   started_at: string | null;
   finished_at: string | null;
   processed_records: number | null;
+  received_records?: number | null;
+  parsed_records?: number | null;
+  skipped_records?: number | null;
+  deleted_records?: number | null;
+  pages_processed?: number | null;
   message: string;
 }
 

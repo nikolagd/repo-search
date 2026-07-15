@@ -1,5 +1,6 @@
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import datetime
 
 NS = {
@@ -17,6 +18,16 @@ DATE_VALUE_PATTERNS = [
     (re.compile(r"^\d{4}-\d{2}$"), "%Y-%m"),
     (re.compile(r"^\d{4}$"), "%Y"),
 ]
+
+
+@dataclass(frozen=True)
+class OAIPageResult:
+    records: list[dict]
+    resumption_token: str | None
+    received_records: int
+    parsed_records: int
+    skipped_records: int
+    deleted_records: int
 
 
 def get_texts(parent, path):
@@ -197,23 +208,59 @@ def parse_metadata(metadata, metadata_prefix, oai_identifier):
     return parse_oai_dc_metadata(dc_node, oai_identifier) if dc_node is not None else None
 
 
-def parse_oai_xml(xml_text: str, metadata_prefix="oai_dc"):
+def has_usable_metadata(record: dict) -> bool:
+    for field in ("title", "authors", "date", "abstract", "identifiers", "subjects", "languages"):
+        value = record.get(field)
+        if isinstance(value, list):
+            if any(item for item in value):
+                return True
+        elif value:
+            return True
+    return False
+
+
+def parse_oai_page(xml_text: str, metadata_prefix="oai_dc") -> OAIPageResult:
     root = ET.fromstring(xml_text)
     parsed_records = []
+    skipped_records = 0
+    deleted_records = 0
+    record_elements = root.findall(".//oai:record", NS)
 
-    for record in root.findall(".//oai:record", NS):
+    for record in record_elements:
+        header = record.find("oai:header", NS)
+        if header is not None and header.get("status") == "deleted":
+            deleted_records += 1
+            continue
+
         metadata = record.find("oai:metadata", NS)
         if metadata is None:
+            skipped_records += 1
             continue
 
         oai_identifier = get_oai_identifier(record)
         if not oai_identifier:
+            skipped_records += 1
             continue
 
         parsed_record = parse_metadata(metadata, metadata_prefix, oai_identifier)
-        if parsed_record is not None:
-            parsed_records.append(parsed_record)
+        if parsed_record is None or not has_usable_metadata(parsed_record):
+            skipped_records += 1
+            continue
+
+        parsed_records.append(parsed_record)
 
     token_el = root.find(".//oai:resumptionToken", NS)
     token = token_el.text.strip() if token_el is not None and token_el.text else None
-    return parsed_records, token
+    return OAIPageResult(
+        records=parsed_records,
+        resumption_token=token,
+        received_records=len(record_elements),
+        parsed_records=len(parsed_records),
+        skipped_records=skipped_records,
+        deleted_records=deleted_records,
+    )
+
+
+def parse_oai_xml(xml_text: str, metadata_prefix="oai_dc"):
+    page = parse_oai_page(xml_text, metadata_prefix)
+    return page.records, page.resumption_token

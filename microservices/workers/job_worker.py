@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from threading import Event, Thread
@@ -23,7 +24,7 @@ from microservices.common.observability import (
 )
 from microservices.common.security import internal_headers
 from microservices.workers.oai_client import OAINoRecordsMatch, choose_metadata_prefix, fetch_page, get_granularity
-from microservices.workers.parser import parse_oai_xml
+from microservices.workers.parser import OAIPageResult, parse_oai_page
 from microservices.workers.time_utils import format_oai_from_date, utc_now_naive
 
 CATALOG_SERVICE_URL = service_url("CATALOG_SERVICE_URL", "http://catalog-service:8000")
@@ -49,6 +50,35 @@ class NonRetryableJobError(RuntimeError):
     pass
 
 
+class JobLeaseLostError(RuntimeError):
+    pass
+
+
+@dataclass
+class HarvestStatistics:
+    received_records: int = 0
+    parsed_records: int = 0
+    skipped_records: int = 0
+    deleted_records: int = 0
+    processed_records: int = 0
+    pages_processed: int = 0
+
+    def add_page(self, page: OAIPageResult) -> None:
+        self.received_records += page.received_records
+        self.parsed_records += page.parsed_records
+        self.skipped_records += page.skipped_records
+        self.deleted_records += page.deleted_records
+        self.pages_processed += 1
+
+
+@dataclass(frozen=True)
+class JobExecutionResult:
+    processed_records: int
+    completion_event: str
+    completion_message: str
+    harvest_statistics: HarvestStatistics | None = None
+
+
 def request_json(method: str, url: str, **kwargs) -> Any:
     headers = kwargs.pop("headers", {})
     headers.update(internal_headers())
@@ -71,6 +101,12 @@ def claim_next_job(max_attempts: int = MAX_ATTEMPTS) -> dict[str, Any] | None:
                     heartbeat_at = NOW(),
                     lease_token = %s,
                     attempt_count = attempt_count + 1,
+                    processed_records = 0,
+                    received_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    parsed_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    skipped_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    deleted_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    pages_processed = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
                     message = 'Job started.',
                     updated_at = NOW()
                 WHERE id = (
@@ -129,13 +165,64 @@ def refresh_job_heartbeat(job_id: int, lease_token: str) -> bool:
         conn.close()
 
 
+def update_harvest_statistics(
+    job_id: int,
+    lease_token: str,
+    statistics: HarvestStatistics,
+) -> bool:
+    """Replace the current attempt snapshot; stored counters are never incremented in SQL."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE admin_job
+                SET received_records = %s,
+                    parsed_records = %s,
+                    skipped_records = %s,
+                    deleted_records = %s,
+                    processed_records = %s,
+                    pages_processed = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND status = 'running'
+                  AND lease_token = %s
+                RETURNING id
+                """,
+                (
+                    statistics.received_records,
+                    statistics.parsed_records,
+                    statistics.skipped_records,
+                    statistics.deleted_records,
+                    statistics.processed_records,
+                    statistics.pages_processed,
+                    job_id,
+                    lease_token,
+                ),
+            )
+            updated = cur.fetchone() is not None
+        conn.commit()
+        return updated
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def finish_job(
     job_id: int,
     lease_token: str,
     status: str,
     processed_records: int | None,
     message: str,
+    harvest_statistics: HarvestStatistics | None = None,
 ) -> bool:
+    received_records = harvest_statistics.received_records if harvest_statistics is not None else None
+    parsed_records = harvest_statistics.parsed_records if harvest_statistics is not None else None
+    skipped_records = harvest_statistics.skipped_records if harvest_statistics is not None else None
+    deleted_records = harvest_statistics.deleted_records if harvest_statistics is not None else None
+    pages_processed = harvest_statistics.pages_processed if harvest_statistics is not None else None
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -145,6 +232,11 @@ def finish_job(
                 SET status = %s,
                     finished_at = NOW(),
                     processed_records = %s,
+                    received_records = %s,
+                    parsed_records = %s,
+                    skipped_records = %s,
+                    deleted_records = %s,
+                    pages_processed = %s,
                     message = %s,
                     heartbeat_at = NULL,
                     lease_token = NULL,
@@ -154,7 +246,18 @@ def finish_job(
                   AND lease_token = %s
                 RETURNING id
                 """,
-                (status, processed_records, message, job_id, lease_token),
+                (
+                    status,
+                    processed_records,
+                    received_records,
+                    parsed_records,
+                    skipped_records,
+                    deleted_records,
+                    pages_processed,
+                    message,
+                    job_id,
+                    lease_token,
+                ),
             )
             updated = cur.fetchone() is not None
         conn.commit()
@@ -354,12 +457,17 @@ def sync_publication_to_search(publication: dict[str, Any]) -> None:
         )
 
 
-def harvest_repository(job: dict[str, Any]) -> int:
+def persist_harvest_statistics(job: dict[str, Any], statistics: HarvestStatistics) -> None:
+    if not update_harvest_statistics(job["id"], job["lease_token"], statistics):
+        raise JobLeaseLostError(f"Lease lost while updating harvest statistics for job {job['id']}.")
+
+
+def harvest_repository(job: dict[str, Any]) -> HarvestStatistics:
     repository_id = job["repository_id"]
     repository = request_json("GET", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    total_processed = 0
+    statistics = HarvestStatistics()
     page_num = 1
     base_url = repository["oai_endpoint"]
     last_harvest = repository.get("last_harvest")
@@ -383,59 +491,94 @@ def harvest_repository(job: dict[str, Any]) -> int:
                 base_url=base_url,
             )
         except OAINoRecordsMatch:
+            persist_harvest_statistics(job, statistics)
             request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
             if span is not None:
                 span.set_attribute("repo_search.records_processed", 0)
-            return 0
+                span.set_attribute("repo_search.oai.pages", 0)
+            return statistics
 
         while True:
             output_file = OUTPUT_DIR / f"repo_{repository_id}_page_{page_num}.xml"
             output_file.write_text(xml_text, encoding="utf-8")
 
-            records, token = parse_oai_xml(xml_text, metadata_prefix)
+            page = parse_oai_page(xml_text, metadata_prefix)
+            statistics.add_page(page)
+            persist_harvest_statistics(job, statistics)
 
-            for record in records:
-                publication_id = request_json(
-                    "POST",
-                    f"{CATALOG_SERVICE_URL}/publications",
-                    json={
-                        "repository_id": repository_id,
-                        "oai_identifier": record["oai_identifier"],
-                        "title": record["title"],
-                        "abstract": record["abstract"],
-                        "date": record["date"],
-                        "source_url": record["source_url"],
-                        "authors": record["authors"],
-                    },
-                )["id"]
-                sync_publication_to_search(
-                    {
-                        "id": publication_id,
-                        "repository_id": repository_id,
-                        "repository_name": repository["name"],
-                        "title": record["title"],
-                        "abstract": record["abstract"],
-                        "source_url": record["source_url"],
-                        "date": record["date"],
-                        "oai_identifier": record["oai_identifier"],
-                        "authors": record["authors"],
-                    }
-                )
-                total_processed += 1
+            try:
+                for record in page.records:
+                    publication_id = request_json(
+                        "POST",
+                        f"{CATALOG_SERVICE_URL}/publications",
+                        json={
+                            "repository_id": repository_id,
+                            "oai_identifier": record["oai_identifier"],
+                            "title": record["title"],
+                            "abstract": record["abstract"],
+                            "date": record["date"],
+                            "source_url": record["source_url"],
+                            "authors": record["authors"],
+                        },
+                    )["id"]
+                    statistics.processed_records += 1
+                    sync_publication_to_search(
+                        {
+                            "id": publication_id,
+                            "repository_id": repository_id,
+                            "repository_name": repository["name"],
+                            "title": record["title"],
+                            "abstract": record["abstract"],
+                            "source_url": record["source_url"],
+                            "date": record["date"],
+                            "oai_identifier": record["oai_identifier"],
+                            "authors": record["authors"],
+                        }
+                    )
+            except Exception:
+                persist_harvest_statistics(job, statistics)
+                raise
 
-            if not token:
+            persist_harvest_statistics(job, statistics)
+            emit_app_event(
+                "job.harvest_page_processed",
+                SERVICE_NAME,
+                job_id=job["id"],
+                repository_id=repository_id,
+                page=page_num,
+                page_received_records=page.received_records,
+                page_parsed_records=page.parsed_records,
+                page_skipped_records=page.skipped_records,
+                page_deleted_records=page.deleted_records,
+                received_records=statistics.received_records,
+                parsed_records=statistics.parsed_records,
+                skipped_records=statistics.skipped_records,
+                deleted_records=statistics.deleted_records,
+                processed_records=statistics.processed_records,
+            )
+
+            if not page.resumption_token:
                 break
 
-            xml_text = fetch_page(token, base_url=base_url)
+            xml_text = fetch_page(page.resumption_token, base_url=base_url)
             page_num += 1
 
         if span is not None:
-            span.set_attribute("repo_search.records_processed", total_processed)
-            span.set_attribute("repo_search.oai.pages", page_num)
+            span.set_attribute("repo_search.records_processed", statistics.processed_records)
+            span.set_attribute("repo_search.oai.records_received", statistics.received_records)
+            span.set_attribute("repo_search.oai.records_parsed", statistics.parsed_records)
+            span.set_attribute("repo_search.oai.records_skipped", statistics.skipped_records)
+            span.set_attribute("repo_search.oai.records_deleted", statistics.deleted_records)
+            span.set_attribute("repo_search.oai.pages", statistics.pages_processed)
 
     request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
-    record_harvest_records(SERVICE_NAME, repository.get("name"), "succeeded", total_processed)
-    return total_processed
+    record_harvest_records(
+        SERVICE_NAME,
+        repository.get("name"),
+        "succeeded",
+        statistics.processed_records,
+    )
+    return statistics
 
 
 def backfill_embeddings() -> int:
@@ -457,23 +600,34 @@ def backfill_embeddings() -> int:
         return processed
 
 
-def execute_job(job: dict[str, Any]) -> tuple[int, str, str]:
+def execute_job(job: dict[str, Any]) -> JobExecutionResult:
     if job["job_type"] == "repository_harvest":
         if job.get("repository_id") is None:
             raise NonRetryableJobError("Repository harvest job is missing repository_id.")
-        processed = harvest_repository(job)
-        return (
-            processed,
-            "job.harvest_completed",
-            f"Harvest completed. Processed records: {processed}.",
+        statistics = harvest_repository(job)
+        deletion_note = (
+            " Deleted OAI headers were counted; local publication deletion is not supported."
+            if statistics.deleted_records
+            else ""
+        )
+        return JobExecutionResult(
+            processed_records=statistics.processed_records,
+            completion_event="job.harvest_completed",
+            completion_message=(
+                f"Harvest completed. Processed records: {statistics.processed_records}. "
+                f"Received: {statistics.received_records}; parsed: {statistics.parsed_records}; "
+                f"skipped: {statistics.skipped_records}; deleted: {statistics.deleted_records}; "
+                f"pages: {statistics.pages_processed}.{deletion_note}"
+            ),
+            harvest_statistics=statistics,
         )
 
     if job["job_type"] == "embedding_backfill":
         processed = backfill_embeddings()
-        return (
-            processed,
-            "job.embedding_backfill_completed",
-            f"Embedding backfill completed. Embedded records: {processed}.",
+        return JobExecutionResult(
+            processed_records=processed,
+            completion_event="job.embedding_backfill_completed",
+            completion_message=f"Embedding backfill completed. Embedded records: {processed}.",
         )
 
     raise NonRetryableJobError(f"Unsupported job type: {job['job_type']}")
@@ -495,7 +649,7 @@ def run_job(job: dict[str, Any]) -> None:
         try:
             heartbeat = JobHeartbeat(job)
             with heartbeat:
-                processed, completion_event, completion_message = execute_job(job)
+                result = execute_job(job)
 
             if heartbeat.lease_lost:
                 status = "lease_lost"
@@ -513,8 +667,9 @@ def run_job(job: dict[str, Any]) -> None:
                 job["id"],
                 job["lease_token"],
                 "succeeded",
-                processed,
-                completion_message,
+                result.processed_records,
+                result.completion_message,
+                harvest_statistics=result.harvest_statistics,
             )
             if not completed:
                 status = "lease_lost"
@@ -529,18 +684,42 @@ def run_job(job: dict[str, Any]) -> None:
                 return
 
             if span is not None:
-                span.set_attribute("repo_search.records_processed", processed)
+                span.set_attribute("repo_search.records_processed", result.processed_records)
+            statistics_fields = {}
+            if result.harvest_statistics is not None:
+                statistics_fields = {
+                    "received_records": result.harvest_statistics.received_records,
+                    "parsed_records": result.harvest_statistics.parsed_records,
+                    "skipped_records": result.harvest_statistics.skipped_records,
+                    "deleted_records": result.harvest_statistics.deleted_records,
+                    "pages_processed": result.harvest_statistics.pages_processed,
+                }
             emit_app_event(
-                completion_event,
+                result.completion_event,
                 SERVICE_NAME,
                 job_id=job["id"],
                 repository_id=job.get("repository_id"),
-                processed_records=processed,
+                processed_records=result.processed_records,
                 attempt_count=job.get("attempt_count"),
                 status="succeeded",
                 duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+                **statistics_fields,
             )
             status = "succeeded"
+        except JobLeaseLostError as exc:
+            status = "lease_lost"
+            if span is not None:
+                span.set_attribute("repo_search.job.error", str(exc))
+            emit_app_event(
+                "job.lease_lost",
+                SERVICE_NAME,
+                job_id=job["id"],
+                job_type=job["job_type"],
+                repository_id=job.get("repository_id"),
+                attempt_count=job.get("attempt_count"),
+                status=status,
+                error=str(exc),
+            )
         except Exception as exc:
             retryable = not isinstance(exc, NonRetryableJobError)
             outcome = fail_or_requeue_job(job, str(exc), retryable=retryable)
