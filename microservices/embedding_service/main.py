@@ -1,15 +1,23 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, Field
 
 from microservices.common.app_logging import emit_app_event
 from microservices.common.embedding_provenance import document_source_hash, utc_generated_at
+from microservices.common.health import (
+    HEALTH_OK,
+    HEALTH_UNAVAILABLE,
+    build_health_response,
+    build_liveness_response,
+    build_readiness_response,
+)
 from microservices.common.observability import observe_embedding, set_retrieval_model_info, setup_observability
-from microservices.common.schemas import HealthResponse
+from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse
 from microservices.embedding_service.model import MODEL_NAME, build_document_text, device, model, warm_up_embedding_model
 from microservices.common.security import require_api_token
 
 app = FastAPI(title="Repo Search Embedding Service", version="0.1.0")
 setup_observability(app, "embedding-service")
+app.state.model_ready = False
 
 
 class QueryEmbeddingRequest(BaseModel):
@@ -23,6 +31,7 @@ class DocumentEmbeddingRequest(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    app.state.model_ready = False
     warm_up_embedding_model()
     set_retrieval_model_info(
         "embedding-service",
@@ -33,11 +42,28 @@ def startup() -> None:
             "dimension": model.get_sentence_embedding_dimension(),
         },
     )
+    app.state.model_ready = True
+
+
+def readiness_dependencies() -> dict[str, str]:
+    return {
+        "model": HEALTH_OK if getattr(app.state, "model_ready", False) else HEALTH_UNAVAILABLE,
+    }
+
+
+@app.get("/live", response_model=LivenessResponse)
+def live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+def ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, readiness_dependencies())
 
 
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", database="not-used")
+    return build_health_response("not-used", readiness_dependencies())
 
 
 @app.get("/model/status", dependencies=[Depends(require_api_token)])

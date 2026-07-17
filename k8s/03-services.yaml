@@ -67,7 +67,14 @@ spec:
                 name: repo-search-secret
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/ready"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 12
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
 ---
@@ -130,7 +137,14 @@ spec:
                 name: repo-search-secret
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/ready"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 12
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
 ---
@@ -176,7 +190,20 @@ spec:
                 name: repo-search-secret
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/ready"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 12
+          startupProbe:
+            httpGet:
+              path: /live
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
 ---
@@ -225,7 +252,20 @@ spec:
               mountPath: /models
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/ready"]
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 12
+          startupProbe:
+            httpGet:
+              path: /live
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 90
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
             initialDelaySeconds: 60
             periodSeconds: 10
       volumes:
@@ -291,9 +331,8 @@ spec:
 
               token = os.environ["API_TOKEN"]
               services = [
-                  "http://catalog-service:8000/health",
-                  "http://query-service:8000/health",
-                  "http://embedding-service:8000/health",
+                  "http://catalog-service:8000/ready",
+                  "http://embedding-service:8000/ready",
               ]
 
               while True:
@@ -324,7 +363,14 @@ spec:
                 name: repo-search-secret
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/ready"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 12
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
             initialDelaySeconds: 20
             periodSeconds: 10
 ---
@@ -387,7 +433,14 @@ spec:
                 name: repo-search-secret
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/ready"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 12
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
 ---
@@ -469,7 +522,14 @@ spec:
                 name: repo-search-secret
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/api/health"]
+              command: ["sh", "-c", "curl -fsS -H \"X-API-Key: $API_TOKEN\" http://localhost:8000/api/ready"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 12
+          livenessProbe:
+            httpGet:
+              path: /api/live
+              port: 8000
             initialDelaySeconds: 20
             periodSeconds: 10
 ---

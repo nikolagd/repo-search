@@ -26,6 +26,15 @@ class HealthResponse(BaseModel):
     database: str
 
 
+class LivenessResponse(BaseModel):
+    status: str
+
+
+class ReadinessResponse(BaseModel):
+    status: str
+    dependencies: dict[str, str]
+
+
 class RepositoryResponse(BaseModel):
     id: int
     name: str

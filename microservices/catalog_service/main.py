@@ -3,12 +3,25 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 
 from microservices.common.db import get_connection
+from microservices.common.health import (
+    build_health_response,
+    build_liveness_response,
+    build_readiness_response,
+    check_database,
+)
 from microservices.common.observability import setup_observability
-from microservices.common.schemas import HealthResponse, RepositoryResponse, RepositoryWriteRequest, StatsResponse
+from microservices.common.schemas import (
+    HealthResponse,
+    LivenessResponse,
+    ReadinessResponse,
+    RepositoryResponse,
+    RepositoryWriteRequest,
+    StatsResponse,
+)
 from microservices.common.security import require_api_token
 
 app = FastAPI(title="Repo Search Catalog Service", version="0.1.0")
@@ -220,20 +233,24 @@ def startup() -> None:
     ensure_schema()
 
 
+def readiness_dependencies() -> dict[str, str]:
+    return {"database": check_database(get_connection)}
+
+
+@app.get("/live", response_model=LivenessResponse)
+def live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+def ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, readiness_dependencies())
+
+
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
 def health() -> HealthResponse:
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        database = "ok"
-    except Exception:
-        database = "unavailable"
-    finally:
-        conn.close()
-
-    return HealthResponse(status="ok", database=database)
+    dependencies = readiness_dependencies()
+    return build_health_response(dependencies["database"], dependencies)
 
 
 @app.get("/repositories", response_model=list[RepositoryResponse], dependencies=[Depends(require_api_token)])

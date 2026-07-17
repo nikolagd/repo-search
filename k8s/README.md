@@ -240,14 +240,18 @@ kubectl -n repo-search logs deployment/embedding-service -f
 kubectl -n repo-search logs deployment/job-worker -f
 ```
 
-Gateway health check:
+Gateway liveness, readiness i kompatibilna health provera:
 
 ```powershell
 kubectl -n repo-search port-forward service/gateway 8090:8000
+curl.exe http://localhost:8090/api/live
+curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/ready
 curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/health
 ```
 
-Ako se health check pozove bez `X-API-Key` header-a, odgovor `401 Unauthorized` je očekivan.
+`/api/live` bez autentifikacije potvrđuje samo da gateway proces odgovara. `/api/ready` zahteva `X-API-Key`, proverava auth, catalog, search i job servise i vraća HTTP 503 ako javna aplikacija nije spremna. `/api/health` je za kompatibilnost: zahteva token i uvek vraća HTTP 200, ali polje `status` i dalje pokazuje stvarno stanje, pa se ne koristi kao readiness signal. Interni servisi koriste iste semantike na `/live`, `/ready` i `/health` putanjama bez `/api` prefiksa.
+
+Query servis ostaje spreman i kada Ollama nije dostupna, jer tada koristi postojeći fallback parser. Ollama URL i dijagnostika ostaju dostupni, ali Ollama niti Query servis nisu startup preduslov za Search.
 
 Provera GPU-a u embedding podu:
 
