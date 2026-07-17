@@ -163,6 +163,16 @@ Proveriti podove:
 kubectl -n repo-search get pods
 ```
 
+### Kreiranje prvog administratora
+
+Na novoj bazi prvi administratorski nalog se kreira eksplicitno u `auth-service` podu:
+
+```powershell
+kubectl -n repo-search exec -it deployment/auth-service -- python -m microservices.auth_service.bootstrap_admin
+```
+
+Komanda interaktivno traži korisničko ime i lozinku; unos lozinke koristi `getpass`, pa se ne upisuje u shell istoriju niti se prikazuje u izlazu. Bootstrap se odbija ako administratorski nalog već postoji. Javni `/auth/register` i frontend `/admin/register` nisu dostupni; postojeći administrator se prijavljuje na `/admin/login`.
+
 Ako su image-i rebuildovani sa istim `:latest` tagovima, restartovati deployment-e:
 
 ```powershell

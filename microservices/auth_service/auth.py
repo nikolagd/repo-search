@@ -24,26 +24,43 @@ JWT_EXPIRY_MINUTES = int(os.getenv("ADMIN_JWT_EXPIRY_MINUTES", "120"))
 JWT_ROTATION_INTERVAL_MINUTES = int(os.getenv("ADMIN_JWT_ROTATION_INTERVAL_MINUTES", "15"))
 JWT_MAX_SESSION_MINUTES = int(os.getenv("ADMIN_JWT_MAX_SESSION_MINUTES", "720"))
 PASSWORD_ITERATIONS = 210_000
+ADMIN_SCHEMA_LOCK_ID = 730_947_854_002_021
 
 admin_cookie_scheme = APIKeyCookie(name=ADMIN_COOKIE_NAME, auto_error=False)
 csrf_cookie_scheme = APIKeyCookie(name=CSRF_COOKIE_NAME, auto_error=False)
+
+
+class AdminAlreadyExistsError(RuntimeError):
+    """Raised when the one-time administrator bootstrap has already completed."""
+
+
+def _lock_admin_schema(cur: Any) -> None:
+    cur.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SCHEMA_LOCK_ID,))
+
+
+def _ensure_admin_schema(cur: Any) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_user (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
+        )
+        """
+    )
 
 
 def ensure_admin_schema() -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS admin_user (
-                    id SERIAL PRIMARY KEY,
-                    username TEXT NOT NULL UNIQUE,
-                    password_hash TEXT NOT NULL,
-                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
-                )
-                """
-            )
+            _lock_admin_schema(cur)
+            _ensure_admin_schema(cur)
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -96,22 +113,16 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def has_admin_users() -> bool:
-    ensure_admin_schema()
+def bootstrap_admin_user(username: str, password: str) -> dict[str, Any]:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            _lock_admin_schema(cur)
+            _ensure_admin_schema(cur)
             cur.execute("SELECT EXISTS (SELECT 1 FROM admin_user)")
-            return bool(cur.fetchone()[0])
-    finally:
-        conn.close()
+            if bool(cur.fetchone()[0]):
+                raise AdminAlreadyExistsError("Administrator bootstrap has already completed.")
 
-
-def create_admin_user(username: str, password: str) -> dict[str, Any]:
-    ensure_admin_schema()
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO admin_user (username, password_hash)

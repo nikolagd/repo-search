@@ -118,25 +118,10 @@ def test_logout_clears_session_and_csrf_cookies(auth_client) -> None:
     assert any(value.startswith(f"{auth.CSRF_COOKIE_NAME}=") and "Max-Age=0" in value for value in set_cookie)
 
 
-def test_bootstrap_registration_is_available_only_without_existing_admin(auth_client, monkeypatch) -> None:
-    monkeypatch.setattr(auth_main, "has_admin_users", lambda: False)
-    monkeypatch.setattr(
-        auth_main,
-        "create_admin_user",
-        lambda username, _password: {"id": 11, "username": username.strip().lower()},
-    )
-
+def test_public_administrator_registration_endpoint_is_unavailable(auth_client) -> None:
     response = auth_client.post(
         "/auth/register",
         json={"username": " FirstAdmin ", "password": "bootstrap-password"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["admin"] == {"id": 11, "username": "firstadmin"}
-
-    monkeypatch.setattr(auth_main, "has_admin_users", lambda: True)
-    closed = auth_client.post(
-        "/auth/register",
-        json={"username": "otheradmin", "password": "bootstrap-password"},
-    )
-    assert closed.status_code == 403
+    assert response.status_code == 404

@@ -475,12 +475,6 @@ input:focus {
   font-weight: 800;
 }
 
-.admin-help {
-  margin-top: 6px;
-  color: #667085;
-  line-height: 1.45;
-}
-
 .admin-header {
   display: flex;
   align-items: center;
