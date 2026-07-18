@@ -1,4 +1,4 @@
-Primarni način pokretanja aplikacije je Kubernetes preko lokalnog Minikube klastera.
+Primarni način pokretanja aplikacije je GPU Kubernetes deployment preko lokalnog Minikube klastera i `k8s-gpu/` overlay-a. Embedding Service zahteva CUDA, a Ollama koristi GPU za `gemma4:12b` inference.
 
 Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](docs/docker-compose-microservices.md) i treba ga koristiti samo za lokalni smoke test, debugging van Kubernetes-a ili poređenje sa manifestima.
 
@@ -9,7 +9,9 @@ Potrebno je:
 - Docker Desktop
 - Minikube
 - kubectl
-- NVIDIA driver ako se koristi GPU
+- NVIDIA driver i NVIDIA Container Runtime
+
+Primarna konfiguracija zahteva NVIDIA GPU. `k8s/` ostaje eksplicitni CPU fallback za razvoj i nije normalna deployment putanja.
 
 Instalacija Minikube-a i kubectl-a:
 
@@ -28,14 +30,7 @@ nvidia-smi
 
 ## 2. Pokretanje Minikube klastera
 
-CPU verzija:
-
-```powershell
-minikube start --driver=docker --profile repo-search
-kubectl config use-context repo-search
-```
-
-GPU verzija:
+GPU verzija (primarna):
 
 U Docker Desktop-u proveriti da je NVIDIA runtime dostupan i postavljen kao default runtime:
 
@@ -67,10 +62,17 @@ minikube addons enable nvidia-device-plugin -p repo-search
 kubectl -n kube-system rollout status daemonset/nvidia-device-plugin-daemonset --timeout=180s
 ```
 
-Provera da li Kubernetes vidi GPU:
+Provera da li Kubernetes vidi jedan zdrav GPU resurs:
 
 ```powershell
 kubectl describe node repo-search | Select-String nvidia.com/gpu
+```
+
+CPU fallback za razvoj se pokreće bez `--gpus=all` i koristi samo `k8s/`:
+
+```powershell
+minikube start --driver=docker --profile repo-search-cpu
+kubectl config use-context repo-search-cpu
 ```
 
 ## 3. Metrics server
@@ -118,19 +120,31 @@ docker build -f frontend/Dockerfile -t repo-search-microservices-frontend:latest
 
 ## 5. Deploy
 
-CPU deploy:
-
-```powershell
-kubectl apply -k k8s/
-```
-
-GPU deploy:
+GPU deploy je primarna i samostalna komanda:
 
 ```powershell
 kubectl apply -k k8s-gpu/
 ```
 
-GPU overlay dodeljuje `nvidia.com/gpu` resurs za `embedding-service` i uključuje NVIDIA runtime za `ollama`.
+Ne primenjivati prvo `k8s/`: `k8s-gpu/` ga već uključuje kao bazu. Overlay postavlja `EMBEDDING_DEVICE=cuda`, `GPU_REQUIRED=true`, `RuntimeClass nvidia` za Embedding Service i Ollama i zadržava DCGM exporter/Prometheus GPU metrike.
+
+Lokalni klaster ima jedan fizički GPU i ne koristi NVIDIA time-slicing. Zato samo Embedding Service traži ekskluzivni `nvidia.com/gpu: 1`, dok Ollama koristi isti uređaj preko NVIDIA runtime-a i `NVIDIA_VISIBLE_DEVICES=all`, bez drugog Kubernetes GPU zahteva. Ovo je proverena lokalna runtime podela uređaja, a ne Kubernetes-native resource sharing; dodavanje drugog `nvidia.com/gpu: 1` zahteva ostavilo bi jedan pod u `Pending` stanju.
+
+Eksplicitni CPU fallback za razvoj:
+
+```powershell
+kubectl apply -k k8s/
+```
+
+U fallback-u su `EMBEDDING_DEVICE=auto` i `GPU_REQUIRED=false`.
+
+Posle rollout-a i preuzimanja `gemma4:12b` pokrenuti kompletnu GPU proveru:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-gpu-deployment.ps1 -Mode Kubernetes -MinikubeProfile repo-search
+```
+
+Skripta fail-fast proverava node GPU resurs, NVIDIA RuntimeClass, zakazivanje i spremnost oba workload-a, CUDA uređaj i naziv GPU-a, embedding zahtev, Ollama inference i `ollama ps`, DCGM endpoint i Prometheus scrape. Ne ispisuje `API_TOKEN`; koristi ga samo unutar pokrenutog Embedding Service procesa. Svaki obavezni neuspeh vraća nenulti exit kod.
 
 Sačekati rollout:
 

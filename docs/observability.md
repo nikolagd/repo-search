@@ -181,11 +181,13 @@ Sledeći Kubernetes observability korak je dodavanje Prometheus scrape-a unutar 
 
 ## Pokretanje u Kubernetes-u
 
-Observability manifesti su uključeni u `k8s/kustomization.yaml`, pa se primenjuju zajedno sa aplikacijom:
+Observability manifesti su uključeni u bazu, a primarni GPU deployment ih proširuje DCGM exporter-om i Prometheus GPU scrape konfiguracijom:
 
 ```powershell
-kubectl apply -k k8s/
+kubectl apply -k k8s-gpu/
 ```
+
+`k8s-gpu/` već uključuje `k8s/`; ne treba primenjivati oba direktorijuma redom. Eksplicitni CPU fallback za razvoj koristi `kubectl apply -k k8s/` i tada nema DCGM exporter.
 
 Sačekati rollout:
 

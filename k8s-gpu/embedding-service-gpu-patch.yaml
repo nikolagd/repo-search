@@ -11,6 +11,13 @@ spec:
       runtimeClassName: nvidia
       containers:
         - name: embedding-service
+          env:
+            - name: EMBEDDING_DEVICE
+              value: cuda
+            - name: GPU_REQUIRED
+              value: "true"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
           resources:
             limits:
               nvidia.com/gpu: "1"

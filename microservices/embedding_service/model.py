@@ -2,15 +2,39 @@ from sentence_transformers import SentenceTransformer
 import torch
 
 from microservices.common.embedding_provenance import build_document_text, embedding_model_name
+from microservices.embedding_service.device import parse_gpu_required, requested_embedding_device, select_embedding_device
 
 MODEL_NAME = embedding_model_name()
-device = "cuda" if torch.cuda.is_available() else "cpu"
+REQUESTED_DEVICE = requested_embedding_device()
+GPU_REQUIRED = parse_gpu_required()
+device: str | None = None
+model: SentenceTransformer | None = None
+initialization_error: str | None = None
 
-model = SentenceTransformer(
-    MODEL_NAME,
-    device=device,
-)
+
+def warm_up_embedding_model() -> None:
+    global device, initialization_error, model
+
+    device = None
+    model = None
+    initialization_error = None
+    try:
+        selected_device = select_embedding_device(
+            REQUESTED_DEVICE,
+            gpu_required=GPU_REQUIRED,
+            cuda_available=torch.cuda.is_available(),
+        )
+        candidate = SentenceTransformer(MODEL_NAME, device=selected_device)
+        candidate.encode("query: warmup", normalize_embeddings=True)
+    except Exception as exc:
+        initialization_error = str(exc)
+        raise
+
+    device = selected_device
+    model = candidate
 
 
-def warm_up_embedding_model():
-    model.encode("query: warmup", normalize_embeddings=True)
+def require_embedding_model() -> SentenceTransformer:
+    if model is None:
+        raise RuntimeError(initialization_error or "Embedding model nije inicijalizovan.")
+    return model
