@@ -158,6 +158,16 @@ Proveriti podove:
 kubectl -n repo-search get pods
 ```
 
+### Kreiranje prvog administratora
+
+Posle prvog pokretanja nove baze kreirati administratorski nalog u `auth-service` podu:
+
+```powershell
+kubectl -n repo-search exec -it deployment/auth-service -- python -m microservices.auth_service.bootstrap_admin
+```
+
+Lozinka se unosi interaktivno preko `getpass` i ne prikazuje se u izlazu. Komanda odbija ponovno kreiranje kada administrator već postoji. Javni registracioni API i `/admin/register` frontend ruta nisu dostupni.
+
 Prvo pokretanje može trajati duže jer Kubernetes pravi novi node, povlači bazne image-e,
 pokreće storage, pravi Postgres volume-e i učitava modele. Backend image je velik zbog
 Python/CUDA zavisnosti, a `ollama pull gemma4:12b` dodatno preuzima nekoliko GB podataka.

@@ -8,16 +8,14 @@ import {
   RefreshCw,
   Save,
   Shield,
-  UserPlus,
   X,
 } from "lucide-react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 
 import { fetchJson, getErrorMessage } from "../api/client";
 import type {
   AdminRepositoryResponse,
   AdminUser,
-  AuthMode,
   AuthResponse,
   EmbeddingStatusResponse,
   HarvestJob,
@@ -27,11 +25,11 @@ import type {
 import { formatDate } from "../utils/format";
 
 interface AdminPanelProps {
-  authMode?: AuthMode;
+  loginPage?: boolean;
   onOverviewRefresh: () => Promise<void>;
 }
 
-export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelProps) {
+export default function AdminPanel({ loginPage = false, onOverviewRefresh }: AdminPanelProps) {
   const navigate = useNavigate();
   const [admin, setAdmin] = useState<AdminUser | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -152,7 +150,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
     setAdminError("");
 
     try {
-      const payload = await fetchJson<AuthResponse>(`/api/auth/${authMode}`, {
+      const payload = await fetchJson<AuthResponse>("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ username, password }),
       });
@@ -320,7 +318,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
   }
 
   if (!admin) {
-    if (!authMode) {
+    if (!loginPage) {
       return <Navigate to="/admin/login" replace />;
     }
 
@@ -329,10 +327,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
         <form className="admin-auth-panel" onSubmit={submitAuth}>
           <div>
             <span className="eyebrow">Admin</span>
-            <h2>{authMode === "login" ? "Log in" : "Register"}</h2>
-            {authMode === "register" && (
-              <p className="admin-help">Registration is only available while no admin account exists.</p>
-            )}
+            <h2>Log in</h2>
           </div>
 
           <label htmlFor="admin-username">Username</label>
@@ -346,7 +341,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           <label htmlFor="admin-password">Password</label>
           <input
             id="admin-password"
-            autoComplete={authMode === "login" ? "current-password" : "new-password"}
+            autoComplete="current-password"
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -355,19 +350,15 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           {authError && <div className="admin-message error">{authError}</div>}
 
           <button className="primary-action" type="submit" disabled={loading || !username.trim() || password.length < 8}>
-            {authMode === "login" ? <Shield aria-hidden="true" size={18} /> : <UserPlus aria-hidden="true" size={18} />}
-            {loading ? "Please wait..." : authMode === "login" ? "Log in" : "Register"}
+            <Shield aria-hidden="true" size={18} />
+            {loading ? "Please wait..." : "Log in"}
           </button>
-
-          <Link className="secondary-action" to={authMode === "login" ? "/admin/register" : "/admin/login"}>
-            {authMode === "login" ? "Initial admin setup" : "Use existing account"}
-          </Link>
         </form>
       </section>
     );
   }
 
-  if (authMode) {
+  if (loginPage) {
     return <Navigate to="/admin" replace />;
   }
 

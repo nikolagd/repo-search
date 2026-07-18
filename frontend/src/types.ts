@@ -1,5 +1,3 @@
-export type AuthMode = "login" | "register";
-
 export type JobStatus = "running" | "succeeded" | "failed";
 
 export interface HealthResponse {

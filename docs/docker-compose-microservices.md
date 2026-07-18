@@ -47,6 +47,14 @@ Proveriti status:
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
 ```
 
+Kreirati prvi administratorski nalog interaktivnom bootstrap komandom:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec auth-service python -m microservices.auth_service.bootstrap_admin
+```
+
+Lozinka se unosi preko `getpass` i ne prikazuje se u izlazu. Komanda odbija ponovno kreiranje ako administrator već postoji; trajne bootstrap lozinke se ne čuvaju u Compose konfiguraciji.
+
 ## 4. Ollama model
 
 Model treba povući jednom nakon prvog pokretanja:

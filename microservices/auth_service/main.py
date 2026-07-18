@@ -4,8 +4,6 @@ from microservices.auth_service.auth import (
     authenticate_admin_user,
     build_auth_response,
     clear_admin_cookie,
-    create_admin_user,
-    has_admin_users,
     require_admin_user,
     require_csrf_token,
     set_admin_cookie,
@@ -51,21 +49,6 @@ def ready(response: Response) -> ReadinessResponse:
 def health() -> HealthResponse:
     dependencies = readiness_dependencies()
     return build_health_response(dependencies["database"], dependencies)
-
-
-@app.post("/auth/register", response_model=AuthResponse, dependencies=[Depends(require_api_token)])
-def register(request: AdminCredentials, response: Response) -> AuthResponse:
-    if has_admin_users():
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=403,
-            detail="Admin registration is closed because an admin account already exists.",
-        )
-
-    admin_user = create_admin_user(request.username, request.password)
-    set_admin_cookie(response, admin_user)
-    return AuthResponse(**build_auth_response(admin_user))
 
 
 @app.post("/auth/login", response_model=AuthResponse, dependencies=[Depends(require_api_token)])
