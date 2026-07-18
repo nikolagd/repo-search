@@ -26,17 +26,24 @@ def embedding_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleT
 
     fake_model_module = ModuleType(model_module_name)
     fake_model_module.MODEL_NAME = "unit-test-embedding-model"
+    fake_model_module.REQUESTED_DEVICE = "auto"
+    fake_model_module.GPU_REQUIRED = False
     fake_model_module.device = "cpu"
     fake_model_module.model = FakeEmbeddingModel()
+    fake_model_module.initialization_error = None
     fake_model_module.fail_warmup = False
     fake_model_module.warmup_calls = 0
 
     def warm_up_embedding_model() -> None:
         fake_model_module.warmup_calls += 1
         if fake_model_module.fail_warmup:
+            fake_model_module.model = None
+            fake_model_module.device = None
+            fake_model_module.initialization_error = "embedding warmup failed"
             raise RuntimeError("embedding warmup failed")
 
     fake_model_module.warm_up_embedding_model = warm_up_embedding_model
+    fake_model_module.require_embedding_model = lambda: fake_model_module.model
     fake_model_module.build_document_text = lambda title, abstract: f"{title or ''} {abstract or ''}".strip()
     monkeypatch.setitem(sys.modules, model_module_name, fake_model_module)
 
@@ -65,6 +72,7 @@ def test_embedding_readiness_tracks_successful_lightweight_startup(
 
         module.startup()
         after_startup = client.get("/ready", headers=AUTH_HEADERS)
+        model_status = client.get("/model/status", headers=AUTH_HEADERS)
     finally:
         client.close()
 
@@ -80,6 +88,9 @@ def test_embedding_readiness_tracks_successful_lightweight_startup(
     assert compatibility.json() == {"status": "unavailable", "database": "not-used"}
     assert after_startup.status_code == 200
     assert after_startup.json() == {"status": "ok", "dependencies": {"model": "ok"}}
+    assert model_status.json()["embedding_device"] == "cpu"
+    assert model_status.json()["embedding_device_requested"] == "auto"
+    assert model_status.json()["embedding_gpu_required"] is False
     assert fake_model_module.warmup_calls == 1
 
 
@@ -97,6 +108,7 @@ def test_embedding_readiness_remains_unavailable_after_failed_warmup(
     client = TestClient(module.app)
     try:
         response = client.get("/ready", headers=AUTH_HEADERS)
+        model_status = client.get("/model/status", headers=AUTH_HEADERS)
     finally:
         client.close()
 
@@ -105,3 +117,5 @@ def test_embedding_readiness_remains_unavailable_after_failed_warmup(
         "status": "unavailable",
         "dependencies": {"model": "unavailable"},
     }
+    assert model_status.json()["embedding_device"] is None
+    assert model_status.json()["embedding_initialization_error"] == "embedding warmup failed"

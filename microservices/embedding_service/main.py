@@ -12,7 +12,8 @@ from microservices.common.health import (
 )
 from microservices.common.observability import observe_embedding, set_retrieval_model_info, setup_observability
 from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse
-from microservices.embedding_service.model import MODEL_NAME, build_document_text, device, model, warm_up_embedding_model
+from microservices.embedding_service import model as embedding_model
+from microservices.embedding_service.model import build_document_text
 from microservices.common.security import require_api_token
 
 app = FastAPI(title="Repo Search Embedding Service", version="0.1.0")
@@ -32,13 +33,14 @@ class DocumentEmbeddingRequest(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     app.state.model_ready = False
-    warm_up_embedding_model()
+    embedding_model.warm_up_embedding_model()
+    model = embedding_model.require_embedding_model()
     set_retrieval_model_info(
         "embedding-service",
         "embedding_model",
         {
-            "model": MODEL_NAME,
-            "device": device,
+            "model": embedding_model.MODEL_NAME,
+            "device": embedding_model.device,
             "dimension": model.get_sentence_embedding_dimension(),
         },
     )
@@ -67,16 +69,21 @@ def health() -> HealthResponse:
 
 
 @app.get("/model/status", dependencies=[Depends(require_api_token)])
-def model_status() -> dict[str, str | int | None]:
+def model_status() -> dict[str, str | int | bool | None]:
+    model = embedding_model.model
     return {
-        "embedding_model": MODEL_NAME,
-        "embedding_device": device,
-        "embedding_dimension": model.get_sentence_embedding_dimension(),
+        "embedding_model": embedding_model.MODEL_NAME,
+        "embedding_device_requested": embedding_model.REQUESTED_DEVICE,
+        "embedding_device": embedding_model.device,
+        "embedding_gpu_required": embedding_model.GPU_REQUIRED,
+        "embedding_dimension": model.get_sentence_embedding_dimension() if model is not None else None,
+        "embedding_initialization_error": embedding_model.initialization_error,
     }
 
 
 @app.post("/embed/query", dependencies=[Depends(require_api_token)])
 def embed_query(request: QueryEmbeddingRequest) -> dict[str, list[float]]:
+    model = embedding_model.require_embedding_model()
     with observe_embedding("embedding-service", "query") as span:
         query = request.query.strip()
         if span is not None:
@@ -93,14 +100,15 @@ def embed_query(request: QueryEmbeddingRequest) -> dict[str, list[float]]:
             kind="query",
             text_length=len(query),
             embedding_dimension=len(vector),
-            model=MODEL_NAME,
-            device=device,
+            model=embedding_model.MODEL_NAME,
+            device=embedding_model.device,
         )
     return {"embedding": vector}
 
 
 @app.post("/embed/document", dependencies=[Depends(require_api_token)])
 def embed_document(request: DocumentEmbeddingRequest) -> dict[str, object]:
+    model = embedding_model.require_embedding_model()
     with observe_embedding("embedding-service", "document") as span:
         document_text = build_document_text(request.title, request.abstract)
         if span is not None:
@@ -117,12 +125,12 @@ def embed_document(request: DocumentEmbeddingRequest) -> dict[str, object]:
             kind="document",
             text_length=len(document_text),
             embedding_dimension=len(vector),
-            model=MODEL_NAME,
-            device=device,
+            model=embedding_model.MODEL_NAME,
+            device=embedding_model.device,
         )
     return {
         "embedding": vector,
-        "embedding_model": MODEL_NAME,
+        "embedding_model": embedding_model.MODEL_NAME,
         "embedding_dimension": len(vector),
         "embedding_generated_at": utc_generated_at().isoformat(),
         "embedding_source_hash": document_source_hash(request.title, request.abstract),
