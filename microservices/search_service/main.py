@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from microservices.common.app_logging import app_observability_log_query_text, emit_app_event
@@ -15,6 +15,14 @@ from microservices.common.embedding_provenance import (
     EXPECTED_EMBEDDING_DIMENSION,
     embedding_is_current,
     embedding_model_name,
+)
+from microservices.common.health import (
+    HEALTH_OK,
+    HEALTH_UNAVAILABLE,
+    build_health_response,
+    build_liveness_response,
+    build_readiness_response,
+    check_database,
 )
 from microservices.common.http import observed_async_request, raise_for_service
 from microservices.common.observability import (
@@ -27,7 +35,7 @@ from microservices.common.observability import (
     set_retrieval_model_info,
     setup_observability,
 )
-from microservices.common.schemas import HealthResponse, SearchRequest
+from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse, SearchRequest
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
 from microservices.search_service.vector_search import execute_vector_search
@@ -154,20 +162,43 @@ def startup() -> None:
     app.state.collect_metrics = refresh_retrieval_index_metrics
 
 
-@app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
-def health() -> HealthResponse:
-    conn = get_connection()
+async def embedding_readiness_status() -> str:
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        database = "ok"
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await observed_async_request(
+                client,
+                "GET",
+                f"{EMBEDDING_SERVICE_URL}/ready",
+                service_name="search-service",
+                upstream_service="embedding-service",
+                headers=internal_headers(),
+            )
+        return HEALTH_OK if response.status_code < 400 else HEALTH_UNAVAILABLE
     except Exception:
-        database = "unavailable"
-    finally:
-        conn.close()
+        return HEALTH_UNAVAILABLE
 
-    return HealthResponse(status="ok", database=database)
+
+async def readiness_dependencies() -> dict[str, str]:
+    return {
+        "database": check_database(get_connection),
+        "embedding-service": await embedding_readiness_status(),
+    }
+
+
+@app.get("/live", response_model=LivenessResponse)
+def live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+async def ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, await readiness_dependencies())
+
+
+@app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
+async def health() -> HealthResponse:
+    dependencies = await readiness_dependencies()
+    return build_health_response(dependencies["database"], dependencies)
 
 
 async def parse_search_query(query: str) -> dict:

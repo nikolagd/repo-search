@@ -1,14 +1,15 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, Field
 
 from microservices.common.app_logging import emit_app_event
+from microservices.common.health import build_health_response, build_liveness_response, build_readiness_response
 from microservices.common.observability import (
     observe_query_parse,
     record_retrieval_parser_event,
     set_retrieval_model_info,
     setup_observability,
 )
-from microservices.common.schemas import HealthResponse
+from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse
 from microservices.common.security import require_api_token
 from microservices.query_service.llm_parser import LLM_MODEL, LLM_PROVIDER, LLM_TIMEOUT, LLM_URL, LLM_WARMUP_ENABLED, warm_up_llm
 from microservices.query_service.query_handler import parse_query
@@ -36,9 +37,23 @@ def startup() -> None:
     )
 
 
+def readiness_dependencies() -> dict[str, str]:
+    return {}
+
+
+@app.get("/live", response_model=LivenessResponse)
+def live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+def ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, readiness_dependencies())
+
+
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", database="not-used")
+    return build_health_response("not-used", readiness_dependencies())
 
 
 @app.get("/model/status", dependencies=[Depends(require_api_token)])

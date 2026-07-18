@@ -66,9 +66,9 @@ services:
     ports:
       - "${MICROSERVICE_GATEWAY_HOST_PORT:-8090}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/api/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   auth-service:
@@ -94,9 +94,9 @@ services:
       db-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   catalog-service:
@@ -117,9 +117,9 @@ services:
       db-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   search-service:
@@ -144,14 +144,12 @@ services:
         condition: service_healthy
       catalog-service:
         condition: service_healthy
-      query-service:
-        condition: service_healthy
       embedding-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   query-service:
@@ -168,14 +166,12 @@ services:
       LLM_MODEL: ${LLM_MODEL:-gemma4:12b}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
       LLM_WARMUP_ENABLED: ${LLM_WARMUP_ENABLED:-1}
-    depends_on:
-      ollama:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
+      start_period: 190s
 
   embedding-service:
     build:
@@ -194,11 +190,11 @@ services:
     volumes:
       - model_cache:/models
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
-      start_period: 60s
+      start_period: 15m
 
   job-service:
     build:
@@ -218,9 +214,9 @@ services:
       db-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   job-worker:

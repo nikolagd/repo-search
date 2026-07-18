@@ -233,12 +233,18 @@ Otvoriti:
 http://<minikube-ip>:30091
 ```
 
-Gateway health check:
+Gateway liveness, readiness i kompatibilna health provera:
 
 ```powershell
 kubectl -n repo-search port-forward service/gateway 8090:8000
+curl.exe http://localhost:8090/api/live
+curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/ready
 curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/health
 ```
+
+`/api/live` bez autentifikacije potvrđuje samo da gateway proces odgovara. `/api/ready` zahteva `X-API-Key`, proverava auth, catalog, search i job servise i vraća HTTP 503 ako javna aplikacija nije spremna. `/api/health` je za kompatibilnost: zahteva token i uvek vraća HTTP 200, ali polje `status` i dalje pokazuje stvarno stanje, pa se ne koristi kao readiness signal. Interni servisi koriste iste semantike na `/live`, `/ready` i `/health` putanjama bez `/api` prefiksa.
+
+Query servis ostaje spreman i kada Ollama nije dostupna, jer tada koristi postojeći fallback parser. Ollama URL i dijagnostika ostaju dostupni, ali Ollama niti Query servis nisu startup preduslov za Search.
 
 ## 8. Observability
 
@@ -409,7 +415,7 @@ Ako posle restartovanja Docker Desktop-a ili `minikube start` podovi prvo izgled
 embedding-service -> search-service -> gateway
 ```
 
-`embedding-service` mora prvo da dobije GPU, učita model i prođe readiness proveru. Dok se to ne desi, `search-service` može ostati u `Init` stanju jer čeka `embedding-service`, a `gateway` može biti `0/1` jer njegov health check poziva downstream servise. Proveriti stanje nekoliko puta u razmaku od 30-60 sekundi:
+`embedding-service` mora prvo da dobije GPU, učita model i prođe readiness proveru. Dok se to ne desi, `search-service` može ostati u `Init` stanju jer čeka spremne catalog i embedding servise, a `gateway` može biti `0/1` jer njegova readiness provera poziva obavezne downstream servise. Query i Ollama ne blokiraju ovaj redosled zato što Search može da koristi fallback parser. Proveriti stanje nekoliko puta u razmaku od 30-60 sekundi:
 
 ```powershell
 kubectl -n repo-search get pods
