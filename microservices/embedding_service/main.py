@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, Field
 
@@ -16,22 +19,8 @@ from microservices.embedding_service import model as embedding_model
 from microservices.embedding_service.model import build_document_text
 from microservices.common.security import require_api_token
 
-app = FastAPI(title="Repo Search Embedding Service", version="0.1.0")
-setup_observability(app, "embedding-service")
-app.state.model_ready = False
-
-
-class QueryEmbeddingRequest(BaseModel):
-    query: str = Field(..., min_length=1)
-
-
-class DocumentEmbeddingRequest(BaseModel):
-    title: str | None = None
-    abstract: str | None = None
-
-
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.model_ready = False
     embedding_model.warm_up_embedding_model()
     model = embedding_model.require_embedding_model()
@@ -45,6 +34,21 @@ def startup() -> None:
         },
     )
     app.state.model_ready = True
+    yield
+
+
+app = FastAPI(title="Repo Search Embedding Service", version="0.1.0", lifespan=lifespan)
+setup_observability(app, "embedding-service")
+app.state.model_ready = False
+
+
+class QueryEmbeddingRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+
+
+class DocumentEmbeddingRequest(BaseModel):
+    title: str | None = None
+    abstract: str | None = None
 
 
 def readiness_dependencies() -> dict[str, str]:
