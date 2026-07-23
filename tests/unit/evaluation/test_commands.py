@@ -155,6 +155,8 @@ def test_candidate_pool_and_report_commands_write_machine_readable_outputs(tmp_p
     report = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
     assert report["metadata"]["git_commit"] == "test-commit"
     assert report["metadata"]["query_count"] == 1
+    assert "embedding_model_revision" not in report["metadata"]
+    assert "embedding_template_version" not in report["metadata"]
 
 
 def test_import_judgments_and_agreement_commands_write_validated_outputs(tmp_path) -> None:

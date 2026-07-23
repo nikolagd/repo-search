@@ -1,6 +1,7 @@
 import csv
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -41,7 +42,14 @@ def _runs():
     return rows
 
 
-def _report(runs=None, metadata=None, ranking_configuration=None):
+def _report(
+    runs=None,
+    metadata=None,
+    ranking_configuration=None,
+    *,
+    embedding_model_revision=None,
+    embedding_template_version=None,
+):
     return build_report(
         runs or _runs(),
         [Judgment("q1", "d1", 2), Judgment("q1", "d2", 0), Judgment("q2", "d3", 0)],
@@ -50,6 +58,8 @@ def _report(runs=None, metadata=None, ranking_configuration=None):
         corpus_size=50,
         k_values=[1, 5],
         embedding_model="model-a",
+        embedding_model_revision=embedding_model_revision,
+        embedding_template_version=embedding_template_version,
         ranking_configuration=(
             {"candidate_multiplier": 6}
             if ranking_configuration is None
@@ -222,10 +232,24 @@ def test_report_metadata_and_output_files_are_machine_readable_and_deterministic
     assert "synthetic overall score" in summary
 
 
-def test_old_serialized_report_without_revision_or_template_remains_readable(tmp_path) -> None:
+def _assert_provenance_metadata_schema_compatible(report) -> None:
+    schema = json.loads(
+        (Path(__file__).resolve().parents[3] / "evaluation" / "schemas" / "report.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    metadata_schema = schema["properties"]["metadata"]
+    metadata = report["metadata"]
+    assert set(metadata_schema["required"]) <= set(metadata)
+    assert set(metadata) <= set(metadata_schema["properties"])
+    for name in ("embedding_model_revision", "embedding_template_version"):
+        if name in metadata:
+            assert isinstance(metadata[name], str) and len(metadata[name]) >= 1
+
+
+def test_historical_report_does_not_claim_current_provenance_and_remains_readable(tmp_path) -> None:
     legacy_report = _report()
-    legacy_report["metadata"].pop("embedding_model_revision")
-    legacy_report["metadata"].pop("embedding_template_version")
+    _assert_provenance_metadata_schema_compatible(legacy_report)
 
     output = tmp_path / "legacy-report"
     write_report(output, legacy_report)
@@ -236,6 +260,24 @@ def test_old_serialized_report_without_revision_or_template_remains_readable(tmp
     assert "embedding_template_version" not in loaded["metadata"]
     summary = (output / "summary.md").read_text(encoding="utf-8")
     assert summary.count("not recorded") >= 2
+
+
+def test_explicit_provenance_is_retained_valid_and_rendered(tmp_path) -> None:
+    report = _report(
+        embedding_model_revision="verified-revision",
+        embedding_template_version="verified-template-v1",
+    )
+    _assert_provenance_metadata_schema_compatible(report)
+    assert report["metadata"]["embedding_model_revision"] == "verified-revision"
+    assert report["metadata"]["embedding_template_version"] == "verified-template-v1"
+
+    output = tmp_path / "new-report"
+    write_report(output, report)
+    loaded = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    _assert_provenance_metadata_schema_compatible(loaded)
+    summary = (output / "summary.md").read_text(encoding="utf-8")
+    assert "`verified-revision`" in summary
+    assert "`verified-template-v1`" in summary
 
 
 def test_incomplete_matrix_and_non_finite_values_fail_defensively() -> None:

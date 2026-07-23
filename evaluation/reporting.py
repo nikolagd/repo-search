@@ -13,7 +13,6 @@ from evaluation.artifacts import publish_directory
 from evaluation.io import validate_comparison_matrix
 from evaluation.metrics import evaluate_run
 from evaluation.models import Judgment, QueryMetadata, QueryRun
-from microservices.common.embedding_provenance import DEFAULT_EMBEDDING_MODEL_REVISION, DOCUMENT_TEMPLATE_VERSION
 
 
 GROUPING_DIMENSIONS = ("language", "script", "category")
@@ -131,8 +130,8 @@ def build_report(
     k_values: list[int],
     embedding_model: str,
     ranking_configuration: dict[str, Any],
-    embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
-    embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
+    embedding_model_revision: str | None = None,
+    embedding_template_version: str | None = None,
     input_sha256: dict[str, str] | None = None,
     evaluated_at: str | None = None,
 ) -> dict[str, Any]:
@@ -140,6 +139,12 @@ def build_report(
         raise ValueError("corpus size must be positive")
     if not isinstance(ranking_configuration, dict):
         raise ValueError("ranking configuration must be a JSON object")
+    for name, value in (
+        ("embedding_model_revision", embedding_model_revision),
+        ("embedding_template_version", embedding_template_version),
+    ):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{name} must be null or a nonblank string")
     _validate_ranking_configuration(ranking_configuration)
     metadata_by_query, methods = _validate_inputs(runs, judgments, query_metadata, k_values)
     k_values = sorted(set(k_values))
@@ -265,25 +270,29 @@ def build_report(
     parser_mode_counts = Counter(
         run.parser_mode for run in runs if run.method == "full_pipeline" and run.parser_mode is not None
     )
+    report_metadata = {
+        "git_commit": git_commit,
+        "evaluation_timestamp": evaluated_at or datetime.now(timezone.utc).isoformat(),
+        "corpus_size": corpus_size,
+        "query_count": len(metadata_by_query),
+        "methods": methods,
+        "k_values": k_values,
+        "embedding_model": embedding_model,
+        "ranking_configuration": ranking_configuration,
+        "input_sha256": dict(sorted((input_sha256 or {}).items())),
+        "judgment_grade_counts": {str(grade): grade_counts[grade] for grade in (0, 1, 2)},
+        "queries_without_positive_judgments": queries_without_positive,
+        "parser_mode_counts": dict(sorted(parser_mode_counts.items())),
+        "validation_assumptions": list(VALIDATION_ASSUMPTIONS),
+        "latency_percentile_convention": "nearest-rank: sorted_values[ceil(0.95*n)-1]",
+    }
+    if embedding_model_revision is not None:
+        report_metadata["embedding_model_revision"] = embedding_model_revision
+    if embedding_template_version is not None:
+        report_metadata["embedding_template_version"] = embedding_template_version
+
     return {
-        "metadata": {
-            "git_commit": git_commit,
-            "evaluation_timestamp": evaluated_at or datetime.now(timezone.utc).isoformat(),
-            "corpus_size": corpus_size,
-            "query_count": len(metadata_by_query),
-            "methods": methods,
-            "k_values": k_values,
-            "embedding_model": embedding_model,
-            "embedding_model_revision": embedding_model_revision,
-            "embedding_template_version": embedding_template_version,
-            "ranking_configuration": ranking_configuration,
-            "input_sha256": dict(sorted((input_sha256 or {}).items())),
-            "judgment_grade_counts": {str(grade): grade_counts[grade] for grade in (0, 1, 2)},
-            "queries_without_positive_judgments": queries_without_positive,
-            "parser_mode_counts": dict(sorted(parser_mode_counts.items())),
-            "validation_assumptions": list(VALIDATION_ASSUMPTIONS),
-            "latency_percentile_convention": "nearest-rank: sorted_values[ceil(0.95*n)-1]",
-        },
+        "metadata": report_metadata,
         "aggregate_metrics": aggregates,
         "per_query_metrics": per_query,
         "grouped_metrics": grouped,
