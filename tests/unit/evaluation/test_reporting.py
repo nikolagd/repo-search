@@ -222,6 +222,22 @@ def test_report_metadata_and_output_files_are_machine_readable_and_deterministic
     assert "synthetic overall score" in summary
 
 
+def test_old_serialized_report_without_revision_or_template_remains_readable(tmp_path) -> None:
+    legacy_report = _report()
+    legacy_report["metadata"].pop("embedding_model_revision")
+    legacy_report["metadata"].pop("embedding_template_version")
+
+    output = tmp_path / "legacy-report"
+    write_report(output, legacy_report)
+
+    loaded = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert loaded["metadata"]["embedding_model"] == "model-a"
+    assert "embedding_model_revision" not in loaded["metadata"]
+    assert "embedding_template_version" not in loaded["metadata"]
+    summary = (output / "summary.md").read_text(encoding="utf-8")
+    assert summary.count("not recorded") >= 2
+
+
 def test_incomplete_matrix_and_non_finite_values_fail_defensively() -> None:
     with pytest.raises(ValueError, match="incomplete comparison matrix"):
         _report(runs=_runs()[:-1])

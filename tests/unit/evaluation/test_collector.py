@@ -22,7 +22,11 @@ from evaluation.collector import (
 from evaluation.corpus_audit import build_snapshot
 from evaluation.io import load_queries, load_runs
 from evaluation.models import EvaluationQuery, QueryRun, RetrievedItem
-from microservices.common.embedding_provenance import document_source_hash
+from microservices.common.embedding_provenance import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    DOCUMENT_TEMPLATE_VERSION,
+    document_source_hash,
+)
 
 
 SERBIAN_QUERIES = [
@@ -39,6 +43,17 @@ def _json_response(payload, status_code=200):
         content=json.dumps(payload, allow_nan=True).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
+
+
+def _model_status(**overrides):
+    payload = {
+        "embedding_model": "model",
+        "embedding_model_revision": DEFAULT_EMBEDDING_MODEL_REVISION,
+        "embedding_template_version": DOCUMENT_TEMPLATE_VERSION,
+        "embedding_dimension": 1024,
+    }
+    payload.update(overrides)
+    return payload
 
 
 class FakeCorpusStore:
@@ -163,6 +178,8 @@ def test_corpus_store_verifies_hash_size_provenance_and_readonly_session(monkeyp
         "authors": ["Author"],
         "has_embedding": True,
         "embedding_model": "model",
+        "embedding_model_revision": DEFAULT_EMBEDDING_MODEL_REVISION,
+        "embedding_template_version": DOCUMENT_TEMPLATE_VERSION,
         "embedding_dimension": 1024,
         "embedding_generated_at": "2026-07-11T00:00:00+00:00",
         "embedding_source_hash": document_source_hash("Title", "Abstract"),
@@ -458,7 +475,7 @@ def test_http_client_preserves_utf8_and_sends_token_only_in_header() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.url.path.endswith("/model/status"):
-            return httpx.Response(200, json={"embedding_model": "model", "embedding_dimension": 1024})
+            return httpx.Response(200, json=_model_status())
         if request.url.path.endswith("/embed/query"):
             return httpx.Response(200, json={"embedding": [0.0] * 1024})
         return httpx.Response(200, json={"plan": {"parser_mode": "llm"}, "results": []})
@@ -585,7 +602,7 @@ def test_http_status_invalid_json_and_model_mismatch_are_sanitized() -> None:
     responses = [
         httpx.Response(503, text="sentinel-token sentinel-password"),
         httpx.Response(200, content=b"not-json"),
-        httpx.Response(200, json={"embedding_model": "wrong", "embedding_dimension": 1024}),
+        httpx.Response(200, json=_model_status(embedding_model="wrong")),
     ]
 
     async def execute():
@@ -619,7 +636,7 @@ def test_embedding_dimension_mismatch_is_rejected_before_queries() -> None:
         transport=httpx.MockTransport(
             lambda _request: httpx.Response(
                 200,
-                json={"embedding_model": "model", "embedding_dimension": 2},
+                json=_model_status(embedding_dimension=2),
             )
         ),
     )
@@ -627,6 +644,33 @@ def test_embedding_dimension_mismatch_is_rejected_before_queries() -> None:
     async def execute():
         try:
             with pytest.raises(CollectorError, match="dimension"):
+                await client.verify_model()
+        finally:
+            await client.close()
+
+    asyncio.run(execute())
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (_model_status(embedding_model_revision="different"), "revision"),
+        (_model_status(embedding_template_version="different"), "template"),
+    ],
+)
+def test_embedding_revision_or_template_mismatch_is_rejected(payload, message) -> None:
+    client = EvaluationServiceClient(
+        embedding_service_url="http://embedding.test",
+        full_pipeline_url="http://gateway.test/api/search",
+        api_token="token",
+        timeout_seconds=5,
+        expected_embedding_model="model",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload)),
+    )
+
+    async def execute():
+        try:
+            with pytest.raises(CollectorError, match=message):
                 await client.verify_model()
         finally:
             await client.close()

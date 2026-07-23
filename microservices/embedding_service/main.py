@@ -5,7 +5,11 @@ from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, Field
 
 from microservices.common.app_logging import emit_app_event
-from microservices.common.embedding_provenance import document_source_hash, utc_generated_at
+from microservices.common.embedding_provenance import (
+    DOCUMENT_TEMPLATE_VERSION,
+    document_source_hash,
+    utc_generated_at,
+)
 from microservices.common.health import (
     HEALTH_OK,
     HEALTH_UNAVAILABLE,
@@ -29,6 +33,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "embedding_model",
         {
             "model": embedding_model.MODEL_NAME,
+            "revision": embedding_model.MODEL_REVISION,
+            "template_version": DOCUMENT_TEMPLATE_VERSION,
             "device": embedding_model.device,
             "dimension": model.get_sentence_embedding_dimension(),
         },
@@ -77,6 +83,8 @@ def model_status() -> dict[str, str | int | bool | None]:
     model = embedding_model.model
     return {
         "embedding_model": embedding_model.MODEL_NAME,
+        "embedding_model_revision": embedding_model.MODEL_REVISION,
+        "embedding_template_version": DOCUMENT_TEMPLATE_VERSION,
         "embedding_device_requested": embedding_model.REQUESTED_DEVICE,
         "embedding_device": embedding_model.device,
         "embedding_gpu_required": embedding_model.GPU_REQUIRED,
@@ -105,6 +113,8 @@ def embed_query(request: QueryEmbeddingRequest) -> dict[str, list[float]]:
             text_length=len(query),
             embedding_dimension=len(vector),
             model=embedding_model.MODEL_NAME,
+            model_revision=embedding_model.MODEL_REVISION,
+            template_version=DOCUMENT_TEMPLATE_VERSION,
             device=embedding_model.device,
         )
     return {"embedding": vector}
@@ -130,11 +140,15 @@ def embed_document(request: DocumentEmbeddingRequest) -> dict[str, object]:
             text_length=len(document_text),
             embedding_dimension=len(vector),
             model=embedding_model.MODEL_NAME,
+            model_revision=embedding_model.MODEL_REVISION,
+            template_version=DOCUMENT_TEMPLATE_VERSION,
             device=embedding_model.device,
         )
     return {
         "embedding": vector,
         "embedding_model": embedding_model.MODEL_NAME,
+        "embedding_model_revision": embedding_model.MODEL_REVISION,
+        "embedding_template_version": DOCUMENT_TEMPLATE_VERSION,
         "embedding_dimension": len(vector),
         "embedding_generated_at": utc_generated_at().isoformat(),
         "embedding_source_hash": document_source_hash(request.title, request.abstract),

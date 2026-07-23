@@ -13,6 +13,7 @@ from evaluation.artifacts import publish_directory
 from evaluation.io import validate_comparison_matrix
 from evaluation.metrics import evaluate_run
 from evaluation.models import Judgment, QueryMetadata, QueryRun
+from microservices.common.embedding_provenance import DEFAULT_EMBEDDING_MODEL_REVISION, DOCUMENT_TEMPLATE_VERSION
 
 
 GROUPING_DIMENSIONS = ("language", "script", "category")
@@ -130,6 +131,8 @@ def build_report(
     k_values: list[int],
     embedding_model: str,
     ranking_configuration: dict[str, Any],
+    embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
     input_sha256: dict[str, str] | None = None,
     evaluated_at: str | None = None,
 ) -> dict[str, Any]:
@@ -271,6 +274,8 @@ def build_report(
             "methods": methods,
             "k_values": k_values,
             "embedding_model": embedding_model,
+            "embedding_model_revision": embedding_model_revision,
+            "embedding_template_version": embedding_template_version,
             "ranking_configuration": ranking_configuration,
             "input_sha256": dict(sorted((input_sha256 or {}).items())),
             "judgment_grade_counts": {str(grade): grade_counts[grade] for grade in (0, 1, 2)},
@@ -376,6 +381,8 @@ def _write_report_files(output: Path, report: dict[str, Any]) -> None:
         f"- Methods: {', '.join(metadata['methods'])}",
         f"- k values: {', '.join(map(str, metadata['k_values']))}",
         f"- Embedding model: `{metadata['embedding_model']}`",
+        f"- Embedding model revision: `{metadata.get('embedding_model_revision', 'not recorded')}`",
+        f"- Embedding template version: `{metadata.get('embedding_template_version', 'not recorded')}`",
         "",
         "Effectiveness and latency are reported separately; no synthetic overall score is calculated.",
         "",

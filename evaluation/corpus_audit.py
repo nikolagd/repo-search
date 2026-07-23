@@ -14,9 +14,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from microservices.common.embedding_provenance import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    DOCUMENT_TEMPLATE_VERSION,
     EXPECTED_EMBEDDING_DIMENSION,
     embedding_is_current,
     embedding_model_name,
+    embedding_model_revision,
 )
 
 
@@ -65,6 +68,8 @@ def classify_metadata_quality(
     publications: list[dict[str, Any]],
     *,
     model_name: str,
+    model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    template_version: str = DOCUMENT_TEMPLATE_VERSION,
     dimension: int = EXPECTED_EMBEDDING_DIMENSION,
 ) -> dict[str, int]:
     counts = Counter(
@@ -90,7 +95,13 @@ def classify_metadata_quality(
         counts["missing_or_blank_oai_identifiers"] += _blank(publication.get("oai_identifier"))
         if not publication.get("has_embedding"):
             counts["missing_embeddings"] += 1
-        elif embedding_is_current(publication, model_name=model_name, dimension=dimension):
+        elif embedding_is_current(
+            publication,
+            model_name=model_name,
+            model_revision=model_revision,
+            template_version=template_version,
+            dimension=dimension,
+        ):
             counts["current_embeddings"] += 1
         else:
             counts["stale_or_unknown_embeddings"] += 1
@@ -177,7 +188,8 @@ def load_corpus(
         cursor.execute(
             """
             SELECT p.id, p.repository_id, p.oai_identifier, p.title, p.abstract, p.date, p.source_url,
-                   p.embedding IS NOT NULL, p.embedding_model, p.embedding_dimension,
+                   p.embedding IS NOT NULL, p.embedding_model, p.embedding_model_revision,
+                   p.embedding_template_version, p.embedding_dimension,
                    p.embedding_generated_at, p.embedding_source_hash,
                    COALESCE(ARRAY_AGG(a.full_name ORDER BY a.full_name)
                        FILTER (WHERE a.full_name IS NOT NULL), '{}')
@@ -199,10 +211,12 @@ def load_corpus(
                 "source_url": row[6],
                 "has_embedding": row[7],
                 "embedding_model": row[8],
-                "embedding_dimension": row[9],
-                "embedding_generated_at": row[10],
-                "embedding_source_hash": row[11],
-                "authors": list(row[12] or []),
+                "embedding_model_revision": row[9],
+                "embedding_template_version": row[10],
+                "embedding_dimension": row[11],
+                "embedding_generated_at": row[12],
+                "embedding_source_hash": row[13],
+                "authors": list(row[14] or []),
             }
             for row in cursor.fetchall()
         ]
@@ -274,6 +288,8 @@ def build_audit(
     git_commit: str,
     audit_timestamp: str,
     model_name: str,
+    model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    template_version: str = DOCUMENT_TEMPLATE_VERSION,
     database_version: str | None,
     database_transaction_snapshot: str | None = None,
     transaction_read_only: str | None = None,
@@ -289,14 +305,24 @@ def build_audit(
             {
                 "repository_id": repository["repository_id"],
                 "repository_name": repository["name"],
-                **classify_metadata_quality(repository_publications, model_name=model_name),
+                **classify_metadata_quality(
+                    repository_publications,
+                    model_name=model_name,
+                    model_revision=model_revision,
+                    template_version=template_version,
+                ),
             }
         )
     quality_rows.append(
         {
             "repository_id": "all",
             "repository_name": "All repositories",
-            **classify_metadata_quality(publications, model_name=model_name),
+            **classify_metadata_quality(
+                publications,
+                model_name=model_name,
+                model_revision=model_revision,
+                template_version=template_version,
+            ),
         }
     )
     audit = {
@@ -306,6 +332,8 @@ def build_audit(
             "corpus_size": len(publications),
             "repository_count": len(repositories),
             "active_embedding_model": model_name,
+            "active_embedding_model_revision": model_revision,
+            "active_embedding_template_version": template_version,
             "corpus_snapshot_hash_sha256": snapshot_hash,
             "snapshot_format": SNAPSHOT_FORMAT,
             "database_server_version": database_version,
@@ -420,6 +448,8 @@ def run_audit(
     git_commit: str,
     audit_time: datetime,
     model_name: str,
+    model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    template_version: str = DOCUMENT_TEMPLATE_VERSION,
 ) -> Path:
     connection = connection_factory()
     try:
@@ -446,6 +476,8 @@ def run_audit(
         git_commit=git_commit,
         audit_timestamp=timestamp_text,
         model_name=model_name,
+        model_revision=model_revision,
+        template_version=template_version,
         database_version=database_version,
         database_transaction_snapshot=transaction_snapshot,
         transaction_read_only=transaction_read_only,
@@ -470,6 +502,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--embedding-model", default=embedding_model_name())
+    parser.add_argument("--embedding-model-revision", default=embedding_model_revision())
+    parser.add_argument("--embedding-template-version", default=DOCUMENT_TEMPLATE_VERSION)
     parser.add_argument("--git-commit")
     return parser
 
@@ -486,6 +520,8 @@ def main(argv: list[str] | None = None) -> int:
         git_commit=args.git_commit or _git_commit(),
         audit_time=datetime.now(timezone.utc),
         model_name=args.embedding_model,
+        model_revision=args.embedding_model_revision,
+        template_version=args.embedding_template_version,
     )
     print(output)
     return 0

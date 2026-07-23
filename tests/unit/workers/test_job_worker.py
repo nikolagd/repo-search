@@ -232,6 +232,8 @@ def test_sync_publication_persists_embedding_and_provenance(monkeypatch: pytest.
     provenance = {
         "embedding": [0.0] * 1024,
         "embedding_model": "model-a",
+        "embedding_model_revision": "revision-a",
+        "embedding_template_version": "template-a",
         "embedding_dimension": 1024,
         "embedding_generated_at": "2026-07-11T10:00:00+00:00",
         "embedding_source_hash": "a" * 64,
@@ -353,6 +355,8 @@ def test_backfill_skips_current_and_regenerates_missing_or_stale(
             "abstract": None,
             "has_embedding": True,
             "embedding_model": "model-a",
+            "embedding_model_revision": "revision-a",
+            "embedding_template_version": "template-a",
             "embedding_dimension": 1024,
             "embedding_generated_at": "2026-07-11T10:00:00+00:00",
             "embedding_source_hash": document_source_hash("Current", None),
@@ -364,6 +368,8 @@ def test_backfill_skips_current_and_regenerates_missing_or_stale(
             "abstract": None,
             "has_embedding": True,
             "embedding_model": "model-a",
+            "embedding_model_revision": "revision-a",
+            "embedding_template_version": "template-a",
             "embedding_dimension": 1024,
             "embedding_generated_at": "2026-07-11T10:00:00+00:00",
             "embedding_source_hash": document_source_hash("Old", None),
@@ -374,7 +380,12 @@ def test_backfill_skips_current_and_regenerates_missing_or_stale(
         if url.endswith("/publications"):
             return publications
         if url.endswith("/model/status"):
-            return {"embedding_model": "model-a", "embedding_dimension": 1024}
+            return {
+                "embedding_model": "model-a",
+                "embedding_model_revision": "revision-a",
+                "embedding_template_version": "template-a",
+                "embedding_dimension": 1024,
+            }
         raise AssertionError(url)
 
     regenerated: list[int] = []

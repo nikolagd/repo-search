@@ -11,7 +11,11 @@ from evaluation.corpus_audit import (
     duplicate_statistics,
     write_audit_outputs,
 )
-from microservices.common.embedding_provenance import document_source_hash
+from microservices.common.embedding_provenance import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    DOCUMENT_TEMPLATE_VERSION,
+    document_source_hash,
+)
 
 
 MODEL = "synthetic-model"
@@ -29,6 +33,8 @@ def _publication(publication_id: int, **overrides):
         "authors": ["Synthetic Author"],
         "has_embedding": False,
         "embedding_model": None,
+        "embedding_model_revision": None,
+        "embedding_template_version": None,
         "embedding_dimension": None,
         "embedding_generated_at": None,
         "embedding_source_hash": None,
@@ -42,6 +48,8 @@ def test_metadata_quality_counts_missing_blank_authors_and_embedding_states() ->
         1,
         has_embedding=True,
         embedding_model=MODEL,
+        embedding_model_revision=DEFAULT_EMBEDDING_MODEL_REVISION,
+        embedding_template_version=DOCUMENT_TEMPLATE_VERSION,
         embedding_dimension=1024,
         embedding_generated_at="2026-07-11T00:00:00+00:00",
         embedding_source_hash=document_source_hash("Title 1", "Abstract 1"),

@@ -17,15 +17,22 @@ class FakeEmbeddingModel:
     def get_sentence_embedding_dimension(self) -> int:
         return 1024
 
+    def encode(self, _text: str, *, normalize_embeddings: bool):
+        assert normalize_embeddings is True
+        return type("Vector", (), {"tolist": lambda self: [0.0] * 1024})()
+
 
 @pytest.fixture
 def embedding_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, ModuleType]]:
+    import microservices.embedding_service as embedding_service_package
+
     main_module_name = "microservices.embedding_service.main"
     model_module_name = "microservices.embedding_service.model"
     previous_main = sys.modules.pop(main_module_name, None)
 
     fake_model_module = ModuleType(model_module_name)
     fake_model_module.MODEL_NAME = "unit-test-embedding-model"
+    fake_model_module.MODEL_REVISION = "unit-test-revision"
     fake_model_module.REQUESTED_DEVICE = "auto"
     fake_model_module.GPU_REQUIRED = False
     fake_model_module.device = "cpu"
@@ -52,6 +59,7 @@ def embedding_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleT
     fake_model_module.require_embedding_model = require_embedding_model
     fake_model_module.build_document_text = lambda title, abstract: f"{title or ''} {abstract or ''}".strip()
     monkeypatch.setitem(sys.modules, model_module_name, fake_model_module)
+    monkeypatch.setattr(embedding_service_package, "model", fake_model_module)
 
     module = importlib.import_module(main_module_name)
     monkeypatch.setattr(
@@ -81,6 +89,11 @@ def test_embedding_readiness_tracks_successful_lightweight_startup(
         compatibility = client.get("/health", headers=AUTH_HEADERS)
         after_startup = client.get("/ready", headers=AUTH_HEADERS)
         model_status = client.get("/model/status", headers=AUTH_HEADERS)
+        document = client.post(
+            "/embed/document",
+            headers=AUTH_HEADERS,
+            json={"title": "Title", "abstract": "Abstract"},
+        )
 
     assert live.status_code == 200
     assert live.json() == {"status": "ok"}
@@ -92,14 +105,24 @@ def test_embedding_readiness_tracks_successful_lightweight_startup(
     assert model_status.json()["embedding_device"] == "cpu"
     assert model_status.json()["embedding_device_requested"] == "auto"
     assert model_status.json()["embedding_gpu_required"] is False
+    assert model_status.json()["embedding_model_revision"] == "unit-test-revision"
+    assert model_status.json()["embedding_template_version"] == "e5-title-abstract-v1"
+    assert document.json()["embedding_model_revision"] == "unit-test-revision"
+    assert document.json()["embedding_template_version"] == "e5-title-abstract-v1"
     assert fake_model_module.warmup_calls == 1
-    assert fake_model_module.require_calls == 1
+    assert fake_model_module.require_calls == 2
     assert fake_model_module.model_info_calls == [
         (
             (
                 "embedding-service",
                 "embedding_model",
-                {"model": "unit-test-embedding-model", "device": "cpu", "dimension": 1024},
+                {
+                    "model": "unit-test-embedding-model",
+                    "revision": "unit-test-revision",
+                    "template_version": "e5-title-abstract-v1",
+                    "device": "cpu",
+                    "dimension": 1024,
+                },
             ),
             {},
         )

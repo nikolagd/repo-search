@@ -586,11 +586,19 @@ def backfill_embeddings() -> int:
         publications = request_json("GET", f"{CATALOG_SERVICE_URL}/publications")
         model_status = request_json("GET", f"{EMBEDDING_SERVICE_URL}/model/status")
         model_name = model_status["embedding_model"]
+        model_revision = model_status["embedding_model_revision"]
+        template_version = model_status["embedding_template_version"]
         dimension = model_status["embedding_dimension"]
         processed = 0
 
         for publication in publications:
-            if embedding_is_current(publication, model_name=model_name, dimension=dimension):
+            if embedding_is_current(
+                publication,
+                model_name=model_name,
+                model_revision=model_revision,
+                template_version=template_version,
+                dimension=dimension,
+            ):
                 continue
             sync_publication_to_search(publication)
             processed += 1

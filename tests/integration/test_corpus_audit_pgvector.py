@@ -5,7 +5,11 @@ import csv
 from datetime import datetime, timedelta, timezone
 
 from evaluation.corpus_audit import run_audit
-from microservices.common.embedding_provenance import document_source_hash
+from microservices.common.embedding_provenance import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    DOCUMENT_TEMPLATE_VERSION,
+    document_source_hash,
+)
 
 
 def _vector_literal() -> str:
@@ -29,7 +33,8 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
                 CREATE TABLE publication (
                     id SERIAL PRIMARY KEY, repository_id INTEGER NOT NULL REFERENCES repository(id),
                     title TEXT, abstract TEXT, source_url TEXT, date TIMESTAMP, oai_identifier TEXT UNIQUE,
-                    embedding vector(1024), embedding_model TEXT, embedding_dimension INTEGER,
+                    embedding vector(1024), embedding_model TEXT, embedding_model_revision TEXT,
+                    embedding_template_version TEXT, embedding_dimension INTEGER,
                     embedding_generated_at TIMESTAMPTZ, embedding_source_hash TEXT
                 );
                 CREATE TABLE publication_author (
@@ -57,8 +62,9 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
                 """
                 INSERT INTO publication (
                     repository_id, title, abstract, source_url, date, oai_identifier, embedding,
-                    embedding_model, embedding_dimension, embedding_generated_at, embedding_source_hash
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s, 1024, %s, %s) RETURNING id
+                    embedding_model, embedding_model_revision, embedding_template_version,
+                    embedding_dimension, embedding_generated_at, embedding_source_hash
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s, 1024, %s, %s) RETURNING id
                 """,
                 (
                     repository_id,
@@ -69,6 +75,8 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
                     "oai:synthetic:1",
                     _vector_literal(),
                     "synthetic-model",
+                    DEFAULT_EMBEDDING_MODEL_REVISION,
+                    DOCUMENT_TEMPLATE_VERSION,
                     datetime(2026, 7, 11, tzinfo=timezone.utc),
                     document_source_hash("Synthetic title", "Synthetic abstract"),
                 ),
@@ -178,7 +186,8 @@ def test_audit_uses_one_repeatable_read_snapshot_during_concurrent_commit(
                 CREATE TABLE publication (
                     id SERIAL PRIMARY KEY, repository_id INTEGER NOT NULL REFERENCES repository(id),
                     title TEXT, abstract TEXT, source_url TEXT, date TIMESTAMP, oai_identifier TEXT UNIQUE,
-                    embedding vector(1024), embedding_model TEXT, embedding_dimension INTEGER,
+                    embedding vector(1024), embedding_model TEXT, embedding_model_revision TEXT,
+                    embedding_template_version TEXT, embedding_dimension INTEGER,
                     embedding_generated_at TIMESTAMPTZ, embedding_source_hash TEXT
                 );
                 CREATE TABLE publication_author (
