@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -23,7 +25,14 @@ from microservices.common.observability import (
 from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse
 from microservices.common.security import require_api_token
 
-app = FastAPI(title="Repo Search Job Service", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    ensure_schema()
+    yield
+
+
+app = FastAPI(title="Repo Search Job Service", version="0.1.0", lifespan=lifespan)
 setup_observability(app, "job-service")
 
 REPOSITORY_HARVEST_JOB = "repository_harvest"
@@ -199,11 +208,6 @@ def ensure_schema() -> None:
         conn.commit()
     finally:
         conn.close()
-
-
-@app.on_event("startup")
-def startup() -> None:
-    ensure_schema()
 
 
 def readiness_dependencies() -> dict[str, str]:

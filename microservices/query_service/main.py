@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, Field
 
@@ -14,16 +17,8 @@ from microservices.common.security import require_api_token
 from microservices.query_service.llm_parser import LLM_MODEL, LLM_PROVIDER, LLM_TIMEOUT, LLM_URL, LLM_WARMUP_ENABLED, warm_up_llm
 from microservices.query_service.query_handler import parse_query
 
-app = FastAPI(title="Repo Search Query Service", version="0.1.0")
-setup_observability(app, "query-service")
-
-
-class QueryParseRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=1000)
-
-
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     warm_up_llm()
     set_retrieval_model_info(
         "query-service",
@@ -35,6 +30,15 @@ def startup() -> None:
             "llm_warmup_enabled": LLM_WARMUP_ENABLED,
         },
     )
+    yield
+
+
+app = FastAPI(title="Repo Search Query Service", version="0.1.0", lifespan=lifespan)
+setup_observability(app, "query-service")
+
+
+class QueryParseRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=1000)
 
 
 def readiness_dependencies() -> dict[str, str]:

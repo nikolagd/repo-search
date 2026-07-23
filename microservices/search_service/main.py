@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import os
 from datetime import date, datetime
 from typing import Any
@@ -40,9 +42,6 @@ from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
 from microservices.search_service.vector_search import execute_vector_search
 
-app = FastAPI(title="Repo Search Search Service", version="0.1.0")
-setup_observability(app, "search-service")
-
 QUERY_SERVICE_URL = service_url("QUERY_SERVICE_URL", "http://query-service:8000")
 EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-service:8000")
 CANDIDATE_MULTIPLIER = int(os.getenv("SEARCH_CANDIDATE_MULTIPLIER", "6"))
@@ -51,6 +50,28 @@ TOPIC_ABSTRACT_BOOST = float(os.getenv("SEARCH_TOPIC_ABSTRACT_BOOST", "0.01"))
 RANKING_PHRASE_BOOST = float(os.getenv("SEARCH_RANKING_PHRASE_BOOST", "0.02"))
 QUERY_COVERAGE_BOOST = float(os.getenv("SEARCH_QUERY_COVERAGE_BOOST", "0.003"))
 LOW_SCORE_THRESHOLD = float(os.getenv("APP_OBSERVABILITY_LOW_SCORE_THRESHOLD", "0.35"))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    ensure_schema()
+    set_retrieval_model_info(
+        "search-service",
+        "ranking_config",
+        {
+            "candidate_multiplier": CANDIDATE_MULTIPLIER,
+            "topic_title_boost": TOPIC_TITLE_BOOST,
+            "topic_abstract_boost": TOPIC_ABSTRACT_BOOST,
+            "ranking_phrase_boost": RANKING_PHRASE_BOOST,
+            "query_coverage_boost": QUERY_COVERAGE_BOOST,
+        },
+    )
+    app.state.collect_metrics = refresh_retrieval_index_metrics
+    yield
+
+
+app = FastAPI(title="Repo Search Search Service", version="0.1.0", lifespan=lifespan)
+setup_observability(app, "search-service")
 
 
 class PublicationEmbeddingRequest(BaseModel):
@@ -143,23 +164,6 @@ def ensure_schema() -> None:
         conn.commit()
     finally:
         conn.close()
-
-
-@app.on_event("startup")
-def startup() -> None:
-    ensure_schema()
-    set_retrieval_model_info(
-        "search-service",
-        "ranking_config",
-        {
-            "candidate_multiplier": CANDIDATE_MULTIPLIER,
-            "topic_title_boost": TOPIC_TITLE_BOOST,
-            "topic_abstract_boost": TOPIC_ABSTRACT_BOOST,
-            "ranking_phrase_boost": RANKING_PHRASE_BOOST,
-            "query_coverage_boost": QUERY_COVERAGE_BOOST,
-        },
-    )
-    app.state.collect_metrics = refresh_retrieval_index_metrics
 
 
 async def embedding_readiness_status() -> str:
