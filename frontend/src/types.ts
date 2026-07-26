@@ -133,6 +133,8 @@ export interface ModelObservabilityResponse {
     llm_url?: string;
     llm_timeout_seconds?: number;
     embedding_model?: string;
+    embedding_model_revision?: string;
+    embedding_template_version?: string;
     embedding_device?: string;
     embedding_dimension?: number | null;
     ranking_config?: Record<string, number>;

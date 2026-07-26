@@ -15,7 +15,12 @@ from evaluation.adapters import FullPipelineAdapter, KeywordBaselineAdapter, Vec
 from evaluation.corpus_audit import build_snapshot
 from evaluation.io import load_runs, validate_comparison_matrix, write_json
 from evaluation.models import EvaluationQuery, QueryRun
-from microservices.common.embedding_provenance import EXPECTED_EMBEDDING_DIMENSION, embedding_is_current
+from microservices.common.embedding_provenance import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    DOCUMENT_TEMPLATE_VERSION,
+    EXPECTED_EMBEDDING_DIMENSION,
+    embedding_is_current,
+)
 from microservices.search_service.vector_search import execute_vector_search
 
 
@@ -51,7 +56,8 @@ def _load_publications(connection: Any) -> list[dict[str, Any]]:
         cursor.execute(
             """
             SELECT p.id, p.repository_id, p.oai_identifier, p.title, p.abstract, p.date, p.source_url,
-                   p.embedding IS NOT NULL, p.embedding_model, p.embedding_dimension,
+                   p.embedding IS NOT NULL, p.embedding_model, p.embedding_model_revision,
+                   p.embedding_template_version, p.embedding_dimension,
                    p.embedding_generated_at, p.embedding_source_hash,
                    COALESCE(ARRAY_AGG(a.full_name ORDER BY a.full_name)
                        FILTER (WHERE a.full_name IS NOT NULL), '{}')
@@ -73,10 +79,12 @@ def _load_publications(connection: Any) -> list[dict[str, Any]]:
                 "source_url": row[6],
                 "has_embedding": row[7],
                 "embedding_model": row[8],
-                "embedding_dimension": row[9],
-                "embedding_generated_at": row[10],
-                "embedding_source_hash": row[11],
-                "authors": list(row[12] or []),
+                "embedding_model_revision": row[9],
+                "embedding_template_version": row[10],
+                "embedding_dimension": row[11],
+                "embedding_generated_at": row[12],
+                "embedding_source_hash": row[13],
+                "authors": list(row[14] or []),
             }
             for row in cursor.fetchall()
         ]
@@ -90,6 +98,8 @@ class ReadOnlyCorpusStore:
         expected_corpus_size: int,
         expected_snapshot_hash: str,
         embedding_model: str,
+        embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+        embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
     ):
         self.connection = connection_factory()
         try:
@@ -98,6 +108,8 @@ class ReadOnlyCorpusStore:
             self.expected_corpus_size = expected_corpus_size
             self.expected_snapshot_hash = expected_snapshot_hash.lower()
             self.embedding_model = embedding_model
+            self.embedding_model_revision = embedding_model_revision
+            self.embedding_template_version = embedding_template_version
             if len(self.expected_snapshot_hash) != 64 or any(
                 character not in "0123456789abcdef" for character in self.expected_snapshot_hash
             ):
@@ -126,6 +138,8 @@ class ReadOnlyCorpusStore:
             if not embedding_is_current(
                 publication,
                 model_name=self.embedding_model,
+                model_revision=self.embedding_model_revision,
+                template_version=self.embedding_template_version,
                 dimension=EXPECTED_EMBEDDING_DIMENSION,
             )
         ]
@@ -163,12 +177,16 @@ def verify_fresh_corpus(
     expected_corpus_size: int,
     expected_snapshot_hash: str,
     embedding_model: str,
+    embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
 ) -> None:
     store = ReadOnlyCorpusStore(
         connection_factory,
         expected_corpus_size=expected_corpus_size,
         expected_snapshot_hash=expected_snapshot_hash,
         embedding_model=embedding_model,
+        embedding_model_revision=embedding_model_revision,
+        embedding_template_version=embedding_template_version,
     )
     store.close()
 
@@ -182,11 +200,15 @@ class EvaluationServiceClient:
         api_token: str,
         timeout_seconds: float,
         expected_embedding_model: str,
+        expected_embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+        expected_embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.embedding_service_url = embedding_service_url.rstrip("/")
         self.full_pipeline_url = full_pipeline_url
         self.expected_embedding_model = expected_embedding_model
+        self.expected_embedding_model_revision = expected_embedding_model_revision
+        self.expected_embedding_template_version = expected_embedding_template_version
         self.client = httpx.AsyncClient(
             timeout=timeout_seconds,
             headers={"X-API-Key": api_token},
@@ -218,6 +240,10 @@ class EvaluationServiceClient:
         )
         if not isinstance(payload, dict) or payload.get("embedding_model") != self.expected_embedding_model:
             raise CollectorError("embedding service model does not match the configured evaluation model")
+        if payload.get("embedding_model_revision") != self.expected_embedding_model_revision:
+            raise CollectorError("embedding service revision does not match the configured evaluation revision")
+        if payload.get("embedding_template_version") != self.expected_embedding_template_version:
+            raise CollectorError("embedding service template does not match the configured evaluation template")
         if payload.get("embedding_dimension") != EXPECTED_EMBEDDING_DIMENSION:
             raise CollectorError("embedding service dimension does not match the frozen vector dimension")
 
@@ -400,6 +426,8 @@ async def run_collection(
     expected_corpus_size: int,
     expected_snapshot_hash: str,
     embedding_model: str,
+    embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
     service_client: EvaluationServiceClient,
     overwrite: bool = False,
 ) -> None:
@@ -417,6 +445,8 @@ async def run_collection(
                 expected_corpus_size=expected_corpus_size,
                 expected_snapshot_hash=expected_snapshot_hash,
                 embedding_model=embedding_model,
+                embedding_model_revision=embedding_model_revision,
+                embedding_template_version=embedding_template_version,
             )
         except CollectorError:
             raise
@@ -441,6 +471,8 @@ async def run_collection(
             expected_corpus_size=expected_corpus_size,
             expected_snapshot_hash=expected_snapshot_hash,
             embedding_model=embedding_model,
+            embedding_model_revision=embedding_model_revision,
+            embedding_template_version=embedding_template_version,
         )
     except CollectorError:
         raise

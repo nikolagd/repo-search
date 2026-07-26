@@ -206,6 +206,8 @@ def ensure_schema() -> None:
                     oai_identifier TEXT UNIQUE,
                     embedding vector(1024),
                     embedding_model TEXT,
+                    embedding_model_revision TEXT,
+                    embedding_template_version TEXT,
                     embedding_dimension INTEGER,
                     embedding_generated_at TIMESTAMPTZ,
                     embedding_source_hash TEXT
@@ -214,6 +216,8 @@ def ensure_schema() -> None:
                 ALTER TABLE publication
                     ADD COLUMN IF NOT EXISTS embedding vector(1024),
                     ADD COLUMN IF NOT EXISTS embedding_model TEXT,
+                    ADD COLUMN IF NOT EXISTS embedding_model_revision TEXT,
+                    ADD COLUMN IF NOT EXISTS embedding_template_version TEXT,
                     ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER,
                     ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS embedding_source_hash TEXT;
@@ -370,6 +374,8 @@ def publications() -> list[dict[str, Any]]:
                        ) AS authors,
                        p.embedding IS NOT NULL,
                        p.embedding_model,
+                       p.embedding_model_revision,
+                       p.embedding_template_version,
                        p.embedding_dimension,
                        p.embedding_generated_at,
                        p.embedding_source_hash
@@ -398,9 +404,11 @@ def publications() -> list[dict[str, Any]]:
             "authors": list(row[8] or []),
             "has_embedding": row[9],
             "embedding_model": row[10],
-            "embedding_dimension": row[11],
-            "embedding_generated_at": serialize_datetime(row[12]),
-            "embedding_source_hash": row[13],
+            "embedding_model_revision": row[11],
+            "embedding_template_version": row[12],
+            "embedding_dimension": row[13],
+            "embedding_generated_at": serialize_datetime(row[14]),
+            "embedding_source_hash": row[15],
         }
         for row in rows
     ]

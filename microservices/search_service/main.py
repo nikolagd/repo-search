@@ -14,9 +14,11 @@ from microservices.common.app_logging import app_observability_log_query_text, e
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
 from microservices.common.embedding_provenance import (
+    DOCUMENT_TEMPLATE_VERSION,
     EXPECTED_EMBEDDING_DIMENSION,
     embedding_is_current,
     embedding_model_name,
+    embedding_model_revision,
 )
 from microservices.common.health import (
     HEALTH_OK,
@@ -77,6 +79,8 @@ setup_observability(app, "search-service")
 class PublicationEmbeddingRequest(BaseModel):
     embedding: list[float] | None = None
     embedding_model: str | None = Field(default=None, min_length=1)
+    embedding_model_revision: str | None = Field(default=None, min_length=1)
+    embedding_template_version: str | None = Field(default=None, min_length=1)
     embedding_dimension: int | None = Field(default=None, gt=0)
     embedding_generated_at: datetime | None = None
     embedding_source_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -88,6 +92,8 @@ class PublicationEmbeddingRequest(BaseModel):
                 value is not None
                 for value in (
                     self.embedding_model,
+                    self.embedding_model_revision,
+                    self.embedding_template_version,
                     self.embedding_dimension,
                     self.embedding_generated_at,
                     self.embedding_source_hash,
@@ -138,6 +144,8 @@ def ensure_schema() -> None:
                 ALTER TABLE publication
                     ADD COLUMN IF NOT EXISTS embedding vector(1024),
                     ADD COLUMN IF NOT EXISTS embedding_model TEXT,
+                    ADD COLUMN IF NOT EXISTS embedding_model_revision TEXT,
+                    ADD COLUMN IF NOT EXISTS embedding_template_version TEXT,
                     ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER,
                     ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS embedding_source_hash TEXT;
@@ -282,7 +290,8 @@ def load_index_status() -> dict[str, Any]:
             cur.execute(
                 """
                 SELECT p.title, p.abstract, p.embedding IS NOT NULL,
-                       p.embedding_model, p.embedding_dimension,
+                       p.embedding_model, p.embedding_model_revision,
+                       p.embedding_template_version, p.embedding_dimension,
                        p.embedding_generated_at, p.embedding_source_hash,
                        COALESCE(r.name, 'unknown')
                 FROM publication p
@@ -294,6 +303,7 @@ def load_index_status() -> dict[str, Any]:
         conn.close()
 
     model_name = embedding_model_name()
+    model_revision = embedding_model_revision()
     indexed = len(rows)
     with_embeddings = 0
     missing = 0
@@ -306,14 +316,16 @@ def load_index_status() -> dict[str, Any]:
             "abstract": row[1],
             "has_embedding": row[2],
             "embedding_model": row[3],
-            "embedding_dimension": row[4],
-            "embedding_generated_at": row[5],
-            "embedding_source_hash": row[6],
+            "embedding_model_revision": row[4],
+            "embedding_template_version": row[5],
+            "embedding_dimension": row[6],
+            "embedding_generated_at": row[7],
+            "embedding_source_hash": row[8],
         }
         repository = repository_counts.setdefault(
-            row[7],
+            row[9],
             {
-                "repository": row[7],
+                "repository": row[9],
                 "publications": 0,
                 "publications_with_embeddings": 0,
                 "current_embeddings": 0,
@@ -328,6 +340,8 @@ def load_index_status() -> dict[str, Any]:
         elif embedding_is_current(
             publication,
             model_name=model_name,
+            model_revision=model_revision,
+            template_version=DOCUMENT_TEMPLATE_VERSION,
             dimension=EXPECTED_EMBEDDING_DIMENSION,
         ):
             with_embeddings += 1
@@ -537,6 +551,8 @@ def upsert_publication_embedding(publication_id: int, request: PublicationEmbedd
                 UPDATE publication
                 SET embedding = %s,
                     embedding_model = %s,
+                    embedding_model_revision = %s,
+                    embedding_template_version = %s,
                     embedding_dimension = %s,
                     embedding_generated_at = %s,
                     embedding_source_hash = %s
@@ -545,6 +561,8 @@ def upsert_publication_embedding(publication_id: int, request: PublicationEmbedd
                 (
                     request.embedding,
                     request.embedding_model,
+                    request.embedding_model_revision,
+                    request.embedding_template_version,
                     request.embedding_dimension,
                     request.embedding_generated_at,
                     request.embedding_source_hash,

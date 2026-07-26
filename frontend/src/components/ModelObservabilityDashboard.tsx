@@ -210,6 +210,14 @@ export default function ModelObservabilityDashboard() {
                   <dd>{data.model_config.embedding_model || "-"}</dd>
                 </div>
                 <div>
+                  <dt>Model revision</dt>
+                  <dd>{data.model_config.embedding_model_revision || "-"}</dd>
+                </div>
+                <div>
+                  <dt>Document template</dt>
+                  <dd>{data.model_config.embedding_template_version || "-"}</dd>
+                </div>
+                <div>
                   <dt><MetricLabel tooltip={tooltipFor("Embedding device")}>Embedding device</MetricLabel></dt>
                   <dd>{data.model_config.embedding_device || "-"}</dd>
                 </div>

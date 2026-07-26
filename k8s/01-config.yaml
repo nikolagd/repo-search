@@ -19,6 +19,7 @@ data:
   QUERY_SERVICE_URL: http://query-service:8000
   EMBEDDING_SERVICE_URL: http://embedding-service:8000
   EMBEDDING_MODEL: intfloat/multilingual-e5-large
+  EMBEDDING_MODEL_REVISION: 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3
   EMBEDDING_DEVICE: auto
   GPU_REQUIRED: "false"
   JOB_SERVICE_URL: http://job-service:8000

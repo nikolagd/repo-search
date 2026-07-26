@@ -24,6 +24,10 @@ from evaluation.judgment_import import import_judgments
 from evaluation.collector import CollectorError, EvaluationServiceClient, run_collection, validate_methods
 from evaluation.pooling import build_candidate_pool
 from evaluation.reporting import build_report, write_report
+from microservices.common.embedding_provenance import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    DOCUMENT_TEMPLATE_VERSION,
+)
 
 
 def _git_commit() -> str:
@@ -89,6 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--corpus-size", required=True, type=int)
     report.add_argument("--k", nargs="+", type=int, default=[5, 10])
     report.add_argument("--embedding-model", required=True)
+    report.add_argument("--embedding-model-revision")
+    report.add_argument("--embedding-template-version")
     report.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
     report.add_argument("--ranking-config", default="{}", help="JSON object or path to a JSON file")
     report.add_argument("--git-commit")
@@ -120,6 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--full-pipeline-url", required=True)
     collect.add_argument("--request-timeout", type=float, default=180.0)
     collect.add_argument("--embedding-model", required=True)
+    collect.add_argument("--embedding-model-revision", default=DEFAULT_EMBEDDING_MODEL_REVISION)
+    collect.add_argument("--embedding-template-version", default=DOCUMENT_TEMPLATE_VERSION)
     collect.add_argument("--expected-corpus-size", type=int, required=True)
     collect.add_argument("--expected-snapshot-hash", required=True)
     collect.add_argument("--overwrite", action="store_true")
@@ -156,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
             api_token=api_token,
             timeout_seconds=args.request_timeout,
             expected_embedding_model=args.embedding_model,
+            expected_embedding_model_revision=args.embedding_model_revision,
+            expected_embedding_template_version=args.embedding_template_version,
         )
         try:
             asyncio.run(
@@ -171,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                     expected_corpus_size=args.expected_corpus_size,
                     expected_snapshot_hash=args.expected_snapshot_hash,
                     embedding_model=args.embedding_model,
+                    embedding_model_revision=args.embedding_model_revision,
+                    embedding_template_version=args.embedding_template_version,
                     service_client=service_client,
                     overwrite=args.overwrite,
                 )
@@ -249,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         corpus_size=args.corpus_size,
         k_values=args.k,
         embedding_model=args.embedding_model,
+        embedding_model_revision=args.embedding_model_revision,
+        embedding_template_version=args.embedding_template_version,
         ranking_configuration=ranking_config,
         input_sha256={
             "queries": sha256_file(args.queries),

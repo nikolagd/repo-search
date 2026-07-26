@@ -139,6 +139,7 @@ services:
       QUERY_SERVICE_URL: http://query-service:8000
       EMBEDDING_SERVICE_URL: http://embedding-service:8000
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_MODEL_REVISION: ${EMBEDDING_MODEL_REVISION:-3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3}
     depends_on:
       db-primary:
         condition: service_healthy
@@ -184,6 +185,7 @@ services:
     environment:
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_MODEL_REVISION: ${EMBEDDING_MODEL_REVISION:-3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3}
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cuda}
       GPU_REQUIRED: ${GPU_REQUIRED:-true}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}

@@ -43,6 +43,7 @@ def test_legacy_publication_schema_is_upgraded_idempotently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from microservices.catalog_service import main as catalog_main
+    from microservices.search_service import main as search_main
 
     connection = pgvector_connection_factory()
     try:
@@ -58,13 +59,25 @@ def test_legacy_publication_schema_is_upgraded_idempotently(
                 )
                 """
             )
+            cursor.execute(
+                "INSERT INTO repository (name, oai_endpoint) VALUES (%s, %s) RETURNING id",
+                ("Legacy", "https://legacy.test/oai"),
+            )
+            repository_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO publication (repository_id, title, embedding) VALUES (%s, %s, %s)",
+                (repository_id, "Legacy vector", _vector()),
+            )
         connection.commit()
     finally:
         connection.close()
 
     monkeypatch.setattr(catalog_main, "get_connection", pgvector_connection_factory)
+    monkeypatch.setattr(search_main, "get_connection", pgvector_connection_factory)
     catalog_main.ensure_schema()
     catalog_main.ensure_schema()
+    search_main.ensure_schema()
+    search_main.ensure_schema()
 
     connection = pgvector_connection_factory()
     try:
@@ -76,14 +89,24 @@ def test_legacy_publication_schema_is_upgraded_idempotently(
                 """
             )
             columns = {row[0] for row in cursor.fetchall()}
+            cursor.execute(
+                """
+                SELECT embedding IS NOT NULL, embedding_model_revision, embedding_template_version
+                FROM publication WHERE title = 'Legacy vector'
+                """
+            )
+            preserved = cursor.fetchone()
     finally:
         connection.close()
     assert {
         "embedding_model",
+        "embedding_model_revision",
+        "embedding_template_version",
         "embedding_dimension",
         "embedding_generated_at",
         "embedding_source_hash",
     } <= columns
+    assert preserved == (True, None, None)
 
 
 def test_provenance_is_persisted_atomically_and_status_tracks_content_changes(
@@ -96,12 +119,15 @@ def test_provenance_is_persisted_atomically_and_status_tracks_content_changes(
     monkeypatch.setattr(catalog_main, "get_connection", pgvector_connection_factory)
     monkeypatch.setattr(search_main, "get_connection", pgvector_connection_factory)
     monkeypatch.setattr(search_main, "embedding_model_name", lambda: "model-a")
+    monkeypatch.setattr(search_main, "embedding_model_revision", lambda: "revision-a")
     catalog_main.ensure_schema()
     publication_id = _seed_publication(pgvector_connection_factory)
     generated_at = datetime(2026, 7, 11, 10, 0, tzinfo=timezone.utc)
     request = search_main.PublicationEmbeddingRequest(
         embedding=_vector(),
         embedding_model="model-a",
+        embedding_model_revision="revision-a",
+        embedding_template_version="e5-title-abstract-v1",
         embedding_dimension=1024,
         embedding_generated_at=generated_at,
         embedding_source_hash=document_source_hash("Title", "Abstract"),
@@ -120,14 +146,25 @@ def test_provenance_is_persisted_atomically_and_status_tracks_content_changes(
     try:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT embedding_model, embedding_dimension, embedding_generated_at, embedding_source_hash FROM publication"
+                """
+                SELECT embedding_model, embedding_model_revision, embedding_template_version,
+                       embedding_dimension, embedding_generated_at, embedding_source_hash
+                FROM publication
+                """
             )
             row = cursor.fetchone()
             cursor.execute("UPDATE publication SET source_url = %s", ("https://changed.test",))
         connection.commit()
     finally:
         connection.close()
-    assert row == ("model-a", 1024, generated_at, document_source_hash("Title", "Abstract"))
+    assert row == (
+        "model-a",
+        "revision-a",
+        "e5-title-abstract-v1",
+        1024,
+        generated_at,
+        document_source_hash("Title", "Abstract"),
+    )
     assert search_main.embedding_status()["current_embeddings"] == 1
 
     connection = pgvector_connection_factory()
@@ -162,6 +199,7 @@ def test_legacy_vector_and_model_change_are_stale(
         connection.close()
 
     monkeypatch.setattr(search_main, "embedding_model_name", lambda: "model-a")
+    monkeypatch.setattr(search_main, "embedding_model_revision", lambda: "revision-a")
     assert search_main.embedding_status()["stale_embeddings"] == 1
 
     connection = pgvector_connection_factory()
@@ -169,10 +207,19 @@ def test_legacy_vector_and_model_change_are_stale(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                UPDATE publication SET embedding_model=%s, embedding_dimension=%s,
+                UPDATE publication SET embedding_model=%s, embedding_model_revision=%s,
+                    embedding_template_version=%s, embedding_dimension=%s,
                     embedding_generated_at=%s, embedding_source_hash=%s WHERE id=%s
                 """,
-                ("model-a", 1024, datetime.now(timezone.utc), document_source_hash("Title", "Abstract"), publication_id),
+                (
+                    "model-a",
+                    "revision-a",
+                    "e5-title-abstract-v1",
+                    1024,
+                    datetime.now(timezone.utc),
+                    document_source_hash("Title", "Abstract"),
+                    publication_id,
+                ),
             )
         connection.commit()
     finally:
