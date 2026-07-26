@@ -70,6 +70,7 @@ def get_stats() -> dict[str, Any]:
                     COUNT(*) FILTER (WHERE embedding IS NOT NULL),
                     MAX(date)
                 FROM publication
+                WHERE is_active = TRUE
                 """
             )
             publications, publications_with_embeddings, last_harvest = cur.fetchone()

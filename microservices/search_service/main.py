@@ -148,7 +148,8 @@ def ensure_schema() -> None:
                     ADD COLUMN IF NOT EXISTS embedding_template_version TEXT,
                     ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER,
                     ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ,
-                    ADD COLUMN IF NOT EXISTS embedding_source_hash TEXT;
+                    ADD COLUMN IF NOT EXISTS embedding_source_hash TEXT,
+                    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 
                 DO $$
                 BEGIN
@@ -296,6 +297,7 @@ def load_index_status() -> dict[str, Any]:
                        COALESCE(r.name, 'unknown')
                 FROM publication p
                 LEFT JOIN repository r ON r.id = p.repository_id
+                WHERE p.is_active = TRUE
                 """
             )
             rows = cur.fetchall()

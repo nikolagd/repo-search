@@ -59,6 +59,13 @@ def test_fetch_vector_results_uses_pgvector_and_year_filters(
                     _vector_literal(first=0.0, second=1.0),
                 ),
                 (
+                    "inactive",
+                    "Inactive nearest publication",
+                    "A matching vector that must not be searchable.",
+                    datetime(2021, 5, 2),
+                    _vector_literal(first=1.0, second=0.0),
+                ),
+                (
                     "outside",
                     "Excluded by year",
                     "A nearest vector outside the requested years.",
@@ -87,6 +94,11 @@ def test_fetch_vector_results_uses_pgvector_and_year_filters(
                 )
                 publication_ids[key] = cursor.fetchone()[0]
 
+            cursor.execute(
+                "UPDATE publication SET is_active = FALSE WHERE id = %s",
+                (publication_ids["inactive"],),
+            )
+
             for author_name in ("Zed Author", "Alice Author"):
                 cursor.execute("INSERT INTO author (full_name) VALUES (%s) RETURNING id", (author_name,))
                 author_id = cursor.fetchone()[0]
@@ -108,3 +120,29 @@ def test_fetch_vector_results_uses_pgvector_and_year_filters(
     assert rows[0][7] == ["Alice Author", "Zed Author"]
     assert rows[1][5] == pytest.approx(1.0, abs=1e-6)
     assert publication_ids["outside"] not in {row[0] for row in rows}
+    assert publication_ids["inactive"] not in {row[0] for row in rows}
+
+    reactivated = catalog_main.upsert_publication(
+        catalog_main.PublicationUpsertRequest(
+            repository_id=repository_id,
+            oai_identifier="oai:test:inactive",
+            title="Inactive nearest publication",
+            abstract="A matching vector that must not be searchable.",
+            date="2021-05-02",
+            source_url="https://example.test/inactive",
+            authors=[],
+        )
+    )
+    assert reactivated == {"id": publication_ids["inactive"], "reactivated": True}
+    search_main.upsert_publication_embedding(
+        publication_ids["inactive"],
+        search_main.PublicationEmbeddingRequest(embedding=query_vector),
+    )
+
+    reactivated_rows = search_main.fetch_vector_results(
+        query_vector,
+        limit=10,
+        year_from=2020,
+        year_to=2022,
+    )
+    assert publication_ids["inactive"] in {row[0] for row in reactivated_rows}

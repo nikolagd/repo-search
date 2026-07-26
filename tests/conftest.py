@@ -32,10 +32,14 @@ def oai_envelope_factory():
         identifier: str | None = "oai:test:1",
         include_metadata: bool = True,
         deleted: bool = False,
+        datestamp: str | None = None,
+        set_specs: list[str] | None = None,
         token: object = TOKEN_ABSENT,
     ) -> str:
         status = ' status="deleted"' if deleted else ""
         identifier_xml = f"<identifier>{escape(identifier)}</identifier>" if identifier is not None else ""
+        datestamp_xml = f"<datestamp>{escape(datestamp)}</datestamp>" if datestamp is not None else ""
+        set_spec_xml = "".join(f"<setSpec>{escape(value)}</setSpec>" for value in (set_specs or []))
         metadata = f"<metadata>{metadata_xml}</metadata>" if include_metadata and not deleted else ""
 
         if token is TOKEN_ABSENT:
@@ -49,7 +53,7 @@ def oai_envelope_factory():
 <OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
   <ListRecords>
     <record>
-      <header{status}>{identifier_xml}</header>
+      <header{status}>{identifier_xml}{datestamp_xml}{set_spec_xml}</header>
       {metadata}
     </record>
     {token_xml}

@@ -39,6 +39,10 @@ def test_job_response_preserves_existing_fields_and_adds_reliability_data() -> N
         "parsed_records": None,
         "skipped_records": None,
         "deleted_records": None,
+        "deactivated_records": None,
+        "unknown_tombstones": None,
+        "already_inactive_tombstones": None,
+        "invalid_tombstones": None,
         "pages_processed": None,
     }
 
@@ -63,6 +67,10 @@ def test_job_response_accepts_legacy_row_shape() -> None:
     assert job["parsed_records"] is None
     assert job["skipped_records"] is None
     assert job["deleted_records"] is None
+    assert job["deactivated_records"] is None
+    assert job["unknown_tombstones"] is None
+    assert job["already_inactive_tombstones"] is None
+    assert job["invalid_tombstones"] is None
     assert job["pages_processed"] is None
 
 
@@ -83,6 +91,10 @@ def test_job_response_exposes_harvest_statistics_without_changing_existing_field
             7,
             2,
             1,
+            1,
+            0,
+            0,
+            0,
             3,
         )
     )
@@ -92,4 +104,8 @@ def test_job_response_exposes_harvest_statistics_without_changing_existing_field
     assert job["parsed_records"] == 7
     assert job["skipped_records"] == 2
     assert job["deleted_records"] == 1
+    assert job["deactivated_records"] == 1
+    assert job["unknown_tombstones"] == 0
+    assert job["already_inactive_tombstones"] == 0
+    assert job["invalid_tombstones"] == 0
     assert job["pages_processed"] == 3

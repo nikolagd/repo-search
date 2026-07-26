@@ -24,7 +24,7 @@ from microservices.common.observability import (
 )
 from microservices.common.security import internal_headers
 from microservices.workers.oai_client import OAINoRecordsMatch, choose_metadata_prefix, fetch_page, get_granularity
-from microservices.workers.parser import OAIPageResult, parse_oai_page
+from microservices.workers.parser import OAIPageResult, OAITombstone, parse_oai_page
 from microservices.workers.time_utils import format_oai_from_date, utc_now_naive
 
 CATALOG_SERVICE_URL = service_url("CATALOG_SERVICE_URL", "http://catalog-service:8000")
@@ -60,6 +60,10 @@ class HarvestStatistics:
     parsed_records: int = 0
     skipped_records: int = 0
     deleted_records: int = 0
+    deactivated_records: int = 0
+    unknown_tombstones: int = 0
+    already_inactive_tombstones: int = 0
+    invalid_tombstones: int = 0
     processed_records: int = 0
     pages_processed: int = 0
 
@@ -69,6 +73,18 @@ class HarvestStatistics:
         self.skipped_records += page.skipped_records
         self.deleted_records += page.deleted_records
         self.pages_processed += 1
+
+    def add_tombstone_outcome(self, outcome: str) -> None:
+        if outcome == "deactivated":
+            self.deactivated_records += 1
+        elif outcome == "unknown":
+            self.unknown_tombstones += 1
+        elif outcome == "already_inactive":
+            self.already_inactive_tombstones += 1
+        elif outcome == "invalid":
+            self.invalid_tombstones += 1
+        else:
+            raise RuntimeError(f"Unsupported tombstone outcome from Catalog Service: {outcome}")
 
 
 @dataclass(frozen=True)
@@ -106,6 +122,10 @@ def claim_next_job(max_attempts: int = MAX_ATTEMPTS) -> dict[str, Any] | None:
                     parsed_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
                     skipped_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
                     deleted_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    deactivated_records = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    unknown_tombstones = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    already_inactive_tombstones = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
+                    invalid_tombstones = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
                     pages_processed = CASE WHEN job_type = 'repository_harvest' THEN 0 ELSE NULL END,
                     message = 'Job started.',
                     updated_at = NOW()
@@ -181,6 +201,10 @@ def update_harvest_statistics(
                     parsed_records = %s,
                     skipped_records = %s,
                     deleted_records = %s,
+                    deactivated_records = %s,
+                    unknown_tombstones = %s,
+                    already_inactive_tombstones = %s,
+                    invalid_tombstones = %s,
                     processed_records = %s,
                     pages_processed = %s,
                     updated_at = NOW()
@@ -194,6 +218,10 @@ def update_harvest_statistics(
                     statistics.parsed_records,
                     statistics.skipped_records,
                     statistics.deleted_records,
+                    statistics.deactivated_records,
+                    statistics.unknown_tombstones,
+                    statistics.already_inactive_tombstones,
+                    statistics.invalid_tombstones,
                     statistics.processed_records,
                     statistics.pages_processed,
                     job_id,
@@ -222,6 +250,12 @@ def finish_job(
     parsed_records = harvest_statistics.parsed_records if harvest_statistics is not None else None
     skipped_records = harvest_statistics.skipped_records if harvest_statistics is not None else None
     deleted_records = harvest_statistics.deleted_records if harvest_statistics is not None else None
+    deactivated_records = harvest_statistics.deactivated_records if harvest_statistics is not None else None
+    unknown_tombstones = harvest_statistics.unknown_tombstones if harvest_statistics is not None else None
+    already_inactive_tombstones = (
+        harvest_statistics.already_inactive_tombstones if harvest_statistics is not None else None
+    )
+    invalid_tombstones = harvest_statistics.invalid_tombstones if harvest_statistics is not None else None
     pages_processed = harvest_statistics.pages_processed if harvest_statistics is not None else None
     conn = get_connection()
     try:
@@ -236,6 +270,10 @@ def finish_job(
                     parsed_records = %s,
                     skipped_records = %s,
                     deleted_records = %s,
+                    deactivated_records = %s,
+                    unknown_tombstones = %s,
+                    already_inactive_tombstones = %s,
+                    invalid_tombstones = %s,
                     pages_processed = %s,
                     message = %s,
                     heartbeat_at = NULL,
@@ -253,6 +291,10 @@ def finish_job(
                     parsed_records,
                     skipped_records,
                     deleted_records,
+                    deactivated_records,
+                    unknown_tombstones,
+                    already_inactive_tombstones,
+                    invalid_tombstones,
                     pages_processed,
                     message,
                     job_id,
@@ -462,6 +504,48 @@ def persist_harvest_statistics(job: dict[str, Any], statistics: HarvestStatistic
         raise JobLeaseLostError(f"Lease lost while updating harvest statistics for job {job['id']}.")
 
 
+def process_tombstone(
+    job: dict[str, Any],
+    repository_id: int,
+    tombstone: OAITombstone,
+    statistics: HarvestStatistics,
+) -> None:
+    if not tombstone.oai_identifier:
+        statistics.add_tombstone_outcome("invalid")
+        emit_app_event(
+            "job.harvest_tombstone_invalid",
+            SERVICE_NAME,
+            job_id=job["id"],
+            repository_id=repository_id,
+            oai_datestamp=tombstone.datestamp,
+            outcome="invalid",
+        )
+        return
+
+    result = request_json(
+        "POST",
+        f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/tombstones",
+        json={
+            "oai_identifier": tombstone.oai_identifier,
+            "datestamp": tombstone.datestamp,
+            "set_specs": list(tombstone.set_specs),
+        },
+    )
+    outcome = result.get("status")
+    statistics.add_tombstone_outcome(outcome)
+    emit_app_event(
+        "job.harvest_tombstone_processed",
+        SERVICE_NAME,
+        job_id=job["id"],
+        repository_id=repository_id,
+        publication_id=result.get("publication_id"),
+        oai_identifier=tombstone.oai_identifier,
+        oai_datestamp=tombstone.datestamp,
+        outcome=outcome,
+        observation_count=result.get("observation_count"),
+    )
+
+
 def harvest_repository(job: dict[str, Any]) -> HarvestStatistics:
     repository_id = job["repository_id"]
     repository = request_json("GET", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}")
@@ -505,8 +589,15 @@ def harvest_repository(job: dict[str, Any]) -> HarvestStatistics:
             page = parse_oai_page(xml_text, metadata_prefix)
             statistics.add_page(page)
             persist_harvest_statistics(job, statistics)
+            page_deactivated_before = statistics.deactivated_records
+            page_unknown_before = statistics.unknown_tombstones
+            page_already_inactive_before = statistics.already_inactive_tombstones
+            page_invalid_before = statistics.invalid_tombstones
 
             try:
+                for tombstone in page.tombstones:
+                    process_tombstone(job, repository_id, tombstone, statistics)
+
                 for record in page.records:
                     publication_id = request_json(
                         "POST",
@@ -550,10 +641,20 @@ def harvest_repository(job: dict[str, Any]) -> HarvestStatistics:
                 page_parsed_records=page.parsed_records,
                 page_skipped_records=page.skipped_records,
                 page_deleted_records=page.deleted_records,
+                page_deactivated_records=statistics.deactivated_records - page_deactivated_before,
+                page_unknown_tombstones=statistics.unknown_tombstones - page_unknown_before,
+                page_already_inactive_tombstones=(
+                    statistics.already_inactive_tombstones - page_already_inactive_before
+                ),
+                page_invalid_tombstones=statistics.invalid_tombstones - page_invalid_before,
                 received_records=statistics.received_records,
                 parsed_records=statistics.parsed_records,
                 skipped_records=statistics.skipped_records,
                 deleted_records=statistics.deleted_records,
+                deactivated_records=statistics.deactivated_records,
+                unknown_tombstones=statistics.unknown_tombstones,
+                already_inactive_tombstones=statistics.already_inactive_tombstones,
+                invalid_tombstones=statistics.invalid_tombstones,
                 processed_records=statistics.processed_records,
             )
 
@@ -569,6 +670,13 @@ def harvest_repository(job: dict[str, Any]) -> HarvestStatistics:
             span.set_attribute("repo_search.oai.records_parsed", statistics.parsed_records)
             span.set_attribute("repo_search.oai.records_skipped", statistics.skipped_records)
             span.set_attribute("repo_search.oai.records_deleted", statistics.deleted_records)
+            span.set_attribute("repo_search.oai.records_deactivated", statistics.deactivated_records)
+            span.set_attribute("repo_search.oai.tombstones_unknown", statistics.unknown_tombstones)
+            span.set_attribute(
+                "repo_search.oai.tombstones_already_inactive",
+                statistics.already_inactive_tombstones,
+            )
+            span.set_attribute("repo_search.oai.tombstones_invalid", statistics.invalid_tombstones)
             span.set_attribute("repo_search.oai.pages", statistics.pages_processed)
 
     request_json("POST", f"{CATALOG_SERVICE_URL}/repositories/{repository_id}/last-harvest")
@@ -613,11 +721,6 @@ def execute_job(job: dict[str, Any]) -> JobExecutionResult:
         if job.get("repository_id") is None:
             raise NonRetryableJobError("Repository harvest job is missing repository_id.")
         statistics = harvest_repository(job)
-        deletion_note = (
-            " Deleted OAI headers were counted; local publication deletion is not supported."
-            if statistics.deleted_records
-            else ""
-        )
         return JobExecutionResult(
             processed_records=statistics.processed_records,
             completion_event="job.harvest_completed",
@@ -625,7 +728,11 @@ def execute_job(job: dict[str, Any]) -> JobExecutionResult:
                 f"Harvest completed. Processed records: {statistics.processed_records}. "
                 f"Received: {statistics.received_records}; parsed: {statistics.parsed_records}; "
                 f"skipped: {statistics.skipped_records}; deleted: {statistics.deleted_records}; "
-                f"pages: {statistics.pages_processed}.{deletion_note}"
+                f"deactivated: {statistics.deactivated_records}; "
+                f"unknown tombstones: {statistics.unknown_tombstones}; "
+                f"already inactive: {statistics.already_inactive_tombstones}; "
+                f"invalid tombstones: {statistics.invalid_tombstones}; "
+                f"pages: {statistics.pages_processed}."
             ),
             harvest_statistics=statistics,
         )
@@ -700,6 +807,10 @@ def run_job(job: dict[str, Any]) -> None:
                     "parsed_records": result.harvest_statistics.parsed_records,
                     "skipped_records": result.harvest_statistics.skipped_records,
                     "deleted_records": result.harvest_statistics.deleted_records,
+                    "deactivated_records": result.harvest_statistics.deactivated_records,
+                    "unknown_tombstones": result.harvest_statistics.unknown_tombstones,
+                    "already_inactive_tombstones": result.harvest_statistics.already_inactive_tombstones,
+                    "invalid_tombstones": result.harvest_statistics.invalid_tombstones,
                     "pages_processed": result.harvest_statistics.pages_processed,
                 }
             emit_app_event(

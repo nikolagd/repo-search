@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from microservices.workers.parser import parse_oai_page, parse_oai_xml, pick_date_only, pick_valid_date
+from microservices.workers.parser import OAITombstone, parse_oai_page, parse_oai_xml, pick_date_only, pick_valid_date
 
 
 OAI_DC_METADATA = """
@@ -235,7 +235,7 @@ def test_page_outcomes_count_actual_valid_deleted_missing_identifier_and_empty_m
           <metadata>{OAI_DC_METADATA}</metadata>
         </record>
         <record>
-          <header status="deleted"><identifier>oai:test:deleted</identifier></header>
+          <header status="deleted"><identifier>oai:test:deleted</identifier><datestamp>2026-07-25T10:11:12Z</datestamp></header>
         </record>
         <record>
           <header/>
@@ -260,6 +260,58 @@ def test_page_outcomes_count_actual_valid_deleted_missing_identifier_and_empty_m
     assert page.parsed_records == 1
     assert page.skipped_records == 2
     assert page.deleted_records == 1
+    assert page.tombstones[0].oai_identifier == "oai:test:deleted"
+    assert page.tombstones[0].datestamp == "2026-07-25T10:11:12Z"
+    assert page.received_records == page.parsed_records + page.skipped_records + page.deleted_records
+
+
+def test_deleted_header_extracts_identifier_datestamp_and_set_specs(oai_envelope_factory) -> None:
+    page = parse_oai_page(
+        oai_envelope_factory(
+            deleted=True,
+            identifier="oai:test:withdrawn",
+            datestamp="2026-07-24T09:08:07Z",
+            set_specs=["publications", "faculty:1"],
+        )
+    )
+
+    assert page.records == []
+    assert page.tombstones == [
+        OAITombstone(
+            oai_identifier="oai:test:withdrawn",
+            datestamp="2026-07-24T09:08:07Z",
+            set_specs=("publications", "faculty:1"),
+        )
+    ]
+    assert page.received_records == page.deleted_records == 1
+    assert page.parsed_records == page.skipped_records == 0
+
+
+def test_deleted_header_without_usable_identifier_is_retained_as_invalid_tombstone(
+    oai_envelope_factory,
+) -> None:
+    page = parse_oai_page(
+        oai_envelope_factory(deleted=True, identifier="   ", datestamp="2026-07-24")
+    )
+
+    assert len(page.tombstones) == 1
+    assert page.tombstones[0].oai_identifier is None
+    assert page.tombstones[0].datestamp == "2026-07-24"
+    assert page.received_records == 1
+    assert page.deleted_records == 1
+    assert page.parsed_records == page.skipped_records == 0
+
+
+def test_normal_record_does_not_create_tombstone(oai_envelope_factory) -> None:
+    page = parse_oai_page(
+        oai_envelope_factory(OAI_DC_METADATA, datestamp="2026-07-24"),
+        "oai_dc",
+    )
+
+    assert len(page.records) == 1
+    assert page.tombstones == []
+    assert page.received_records == page.parsed_records == 1
+    assert page.skipped_records == page.deleted_records == 0
 
 
 @pytest.mark.parametrize(

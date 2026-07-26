@@ -4,7 +4,8 @@ import json
 import csv
 from datetime import datetime, timedelta, timezone
 
-from evaluation.corpus_audit import run_audit
+from evaluation.collector import _load_publications
+from evaluation.corpus_audit import build_snapshot, run_audit
 from microservices.common.embedding_provenance import (
     DEFAULT_EMBEDDING_MODEL_REVISION,
     DOCUMENT_TEMPLATE_VERSION,
@@ -35,7 +36,8 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
                     title TEXT, abstract TEXT, source_url TEXT, date TIMESTAMP, oai_identifier TEXT UNIQUE,
                     embedding vector(1024), embedding_model TEXT, embedding_model_revision TEXT,
                     embedding_template_version TEXT, embedding_dimension INTEGER,
-                    embedding_generated_at TIMESTAMPTZ, embedding_source_hash TEXT
+                    embedding_generated_at TIMESTAMPTZ, embedding_source_hash TEXT,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE
                 );
                 CREATE TABLE publication_author (
                     publication_id INTEGER REFERENCES publication(id), author_id INTEGER REFERENCES author(id),
@@ -93,6 +95,15 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
                 """,
                 (repository_id,),
             )
+            cursor.execute(
+                """
+                INSERT INTO publication (
+                    repository_id, title, abstract, source_url, oai_identifier, is_active
+                ) VALUES (%s, 'Withdrawn title', 'Withdrawn abstract',
+                          'https://example.test/withdrawn', 'oai:synthetic:withdrawn', FALSE)
+                """,
+                (repository_id,),
+            )
             older_start = datetime(2026, 7, 9, 10, 0)
             newer_created = datetime(2026, 7, 10, 10, 0)
             cursor.execute(
@@ -129,6 +140,7 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
     )
 
     audit = json.loads((output / "audit.json").read_text(encoding="utf-8"))
+    snapshot = json.loads((output / "corpus_snapshot.json").read_text(encoding="utf-8"))
     assert audit["metadata"]["corpus_size"] == 2
     assert audit["metadata_quality"]["current_embeddings"] == 1
     assert audit["metadata_quality"]["missing_embeddings"] == 1
@@ -145,6 +157,15 @@ def test_corpus_audit_reads_seeded_pgvector_corpus_without_modifying_rows(
         "corpus_snapshot.json",
         "summary.md",
     }
+    assert [row["title"] for row in snapshot["publications"]] == ["Synthetic title", ""]
+
+    collector_connection = pgvector_connection_factory()
+    try:
+        collector_publications = _load_publications(collector_connection)
+    finally:
+        collector_connection.close()
+    assert [publication["title"] for publication in collector_publications] == ["Synthetic title", ""]
+    assert build_snapshot(collector_publications)[1] == audit["metadata"]["corpus_snapshot_hash_sha256"]
     with (output / "repositories.csv").open(encoding="utf-8") as stream:
         repository_row = next(csv.DictReader(stream))
     assert repository_row["latest_harvest_job_status"] == "queued"
@@ -188,7 +209,8 @@ def test_audit_uses_one_repeatable_read_snapshot_during_concurrent_commit(
                     title TEXT, abstract TEXT, source_url TEXT, date TIMESTAMP, oai_identifier TEXT UNIQUE,
                     embedding vector(1024), embedding_model TEXT, embedding_model_revision TEXT,
                     embedding_template_version TEXT, embedding_dimension INTEGER,
-                    embedding_generated_at TIMESTAMPTZ, embedding_source_hash TEXT
+                    embedding_generated_at TIMESTAMPTZ, embedding_source_hash TEXT,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE
                 );
                 CREATE TABLE publication_author (
                     publication_id INTEGER REFERENCES publication(id), author_id INTEGER REFERENCES author(id),

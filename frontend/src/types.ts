@@ -86,6 +86,10 @@ export interface HarvestJob {
   parsed_records?: number | null;
   skipped_records?: number | null;
   deleted_records?: number | null;
+  deactivated_records?: number | null;
+  unknown_tombstones?: number | null;
+  already_inactive_tombstones?: number | null;
+  invalid_tombstones?: number | null;
   pages_processed?: number | null;
   message: string;
 }

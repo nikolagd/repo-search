@@ -152,7 +152,9 @@ def get_embedding_status() -> dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM publication WHERE embedding IS NULL")
+            cur.execute(
+                "SELECT COUNT(*) FROM publication WHERE is_active = TRUE AND embedding IS NULL"
+            )
             missing_count = cur.fetchone()[0]
 
         embedding_job = get_latest_embedding_job(conn)

@@ -78,7 +78,8 @@ def read_job(connection_factory: Callable[[], Any], job_id: int) -> dict[str, An
                 SELECT status, attempt_count, heartbeat_at, lease_token,
                        finished_at, processed_records, message,
                        received_records, parsed_records, skipped_records,
-                       deleted_records, pages_processed
+                       deleted_records, deactivated_records, unknown_tombstones,
+                       already_inactive_tombstones, invalid_tombstones, pages_processed
                 FROM admin_job
                 WHERE id = %s
                 """,
@@ -97,7 +98,11 @@ def read_job(connection_factory: Callable[[], Any], job_id: int) -> dict[str, An
             "parsed_records": row[8],
             "skipped_records": row[9],
             "deleted_records": row[10],
-            "pages_processed": row[11],
+            "deactivated_records": row[11],
+            "unknown_tombstones": row[12],
+            "already_inactive_tombstones": row[13],
+            "invalid_tombstones": row[14],
+            "pages_processed": row[15],
         }
     finally:
         connection.close()
@@ -148,12 +153,26 @@ def test_ensure_schema_upgrades_legacy_admin_job_table(
                 """
                 SELECT attempt_count, heartbeat_at, lease_token,
                        received_records, parsed_records, skipped_records,
-                       deleted_records, pages_processed
+                       deleted_records, deactivated_records, unknown_tombstones,
+                       already_inactive_tombstones, invalid_tombstones, pages_processed
                 FROM admin_job
                 WHERE message = 'legacy row'
                 """
             )
-            assert cursor.fetchone() == (0, None, None, None, None, None, None, None)
+            assert cursor.fetchone() == (
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
     finally:
         connection.close()
 
@@ -288,6 +307,10 @@ def test_successful_completion_clears_lease_state(job_database: Callable[[], Any
             parsed_records=12,
             skipped_records=2,
             deleted_records=1,
+            deactivated_records=1,
+            unknown_tombstones=0,
+            already_inactive_tombstones=0,
+            invalid_tombstones=0,
             processed_records=12,
             pages_processed=3,
         ),
@@ -302,6 +325,7 @@ def test_successful_completion_clears_lease_state(job_database: Callable[[], Any
     assert job["parsed_records"] == 12
     assert job["skipped_records"] == 2
     assert job["deleted_records"] == 1
+    assert job["deactivated_records"] == 1
     assert job["pages_processed"] == 3
 
 
@@ -336,6 +360,7 @@ def test_retry_resets_statistics_and_absolute_updates_do_not_double_counts(
         parsed_records=6,
         skipped_records=2,
         deleted_records=1,
+        unknown_tombstones=1,
         processed_records=5,
         pages_processed=2,
     )
@@ -359,6 +384,10 @@ def test_retry_resets_statistics_and_absolute_updates_do_not_double_counts(
     assert reset_job["parsed_records"] == 0
     assert reset_job["skipped_records"] == 0
     assert reset_job["deleted_records"] == 0
+    assert reset_job["deactivated_records"] == 0
+    assert reset_job["unknown_tombstones"] == 0
+    assert reset_job["already_inactive_tombstones"] == 0
+    assert reset_job["invalid_tombstones"] == 0
     assert reset_job["pages_processed"] == 0
 
     latest_attempt = job_worker.HarvestStatistics(
@@ -366,6 +395,7 @@ def test_retry_resets_statistics_and_absolute_updates_do_not_double_counts(
         parsed_records=2,
         skipped_records=1,
         deleted_records=1,
+        unknown_tombstones=1,
         processed_records=2,
         pages_processed=1,
     )
@@ -386,6 +416,7 @@ def test_retry_resets_statistics_and_absolute_updates_do_not_double_counts(
     assert job["parsed_records"] == 2
     assert job["skipped_records"] == 1
     assert job["deleted_records"] == 1
+    assert job["unknown_tombstones"] == 1
     assert job["pages_processed"] == 1
 
 

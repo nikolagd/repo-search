@@ -196,6 +196,8 @@ def load_corpus(
             FROM publication p
             LEFT JOIN publication_author pa ON pa.publication_id = p.id
             LEFT JOIN author a ON a.id = pa.author_id
+            -- Thesis corpus identity, hashes, and quality metrics cover searchable records only.
+            WHERE p.is_active = TRUE
             GROUP BY p.id
             ORDER BY p.id
             """

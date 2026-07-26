@@ -271,8 +271,20 @@ export default function AdminPanel({ loginPage = false, onOverviewRefresh }: Adm
               <span>Received {job.received_records}</span>
               <span>Parsed {job.parsed_records ?? 0}</span>
               <span>Skipped {job.skipped_records ?? 0}</span>
-              <span title="Deleted OAI headers are counted; local publications are not deleted.">
+              <span title="Source tombstone headers observed in the OAI-PMH response.">
                 Deleted {job.deleted_records ?? 0}
+              </span>
+              <span title="Previously active publications deactivated by matching repository and OAI identifier.">
+                Deactivated {job.deactivated_records ?? 0}
+              </span>
+              <span title="Tombstones whose repository-scoped OAI identifier is not stored locally.">
+                Unknown {job.unknown_tombstones ?? 0}
+              </span>
+              <span title="Repeated tombstones for publications that were already inactive.">
+                Already inactive {job.already_inactive_tombstones ?? 0}
+              </span>
+              <span title="Deleted headers without a usable OAI identifier; no local publication was changed.">
+                Invalid {job.invalid_tombstones ?? 0}
               </span>
               <span>Persisted {job.processed_records ?? 0}</span>
               <span>Pages {job.pages_processed ?? 0}</span>
