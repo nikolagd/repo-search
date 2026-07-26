@@ -64,6 +64,7 @@ def _load_publications(connection: Any) -> list[dict[str, Any]]:
             FROM publication p
             LEFT JOIN publication_author pa ON pa.publication_id = p.id
             LEFT JOIN author a ON a.id = pa.author_id
+            WHERE p.is_active = TRUE
             GROUP BY p.id
             ORDER BY p.id
             """

@@ -127,6 +127,32 @@ class FakeConnection:
         self.closed = True
 
 
+def test_publication_loader_explicitly_limits_frozen_corpus_to_active_rows() -> None:
+    class Cursor:
+        query = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query):
+            self.query = query
+
+        def fetchall(self):
+            return []
+
+    cursor = Cursor()
+
+    class Connection:
+        def cursor(self):
+            return cursor
+
+    assert collector_module._load_publications(Connection()) == []
+    assert "WHERE p.is_active = TRUE" in cursor.query
+
+
 def test_collects_complete_matrix_with_zero_runs_scores_order_and_parser_mode() -> None:
     queries = [EvaluationQuery("q1", "shared term"), EvaluationQuery("q2", "no matches")]
     store = FakeCorpusStore()

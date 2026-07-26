@@ -57,7 +57,13 @@ def insert_publication(conn, repo_id, record):
                     date = EXCLUDED.date,
                     source_url = EXCLUDED.source_url,
                     is_active = TRUE,
-                    embedding = NULL
+                    embedding = CASE
+                        WHEN publication.is_active = TRUE
+                         AND publication.title IS NOT DISTINCT FROM EXCLUDED.title
+                         AND publication.abstract IS NOT DISTINCT FROM EXCLUDED.abstract
+                        THEN publication.embedding
+                        ELSE NULL
+                    END
                 RETURNING id
                 """,
                 (

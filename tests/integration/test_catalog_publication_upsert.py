@@ -6,6 +6,7 @@ from typing import Any, Callable
 import psycopg2
 import pytest
 
+from legacy_monolith.backend.etl.db import insert_publication as legacy_insert_publication
 from microservices.catalog_service import main as catalog
 
 
@@ -290,6 +291,74 @@ def test_normal_upsert_reactivates_and_invalidates_old_embedding_provenance(cata
                 (repository_id, initial.oai_identifier),
             )
             assert cursor.fetchone() == ("2026-07-25T10:11:12Z", 1, True)
+    finally:
+        connection.close()
+
+
+def test_legacy_upsert_retains_embedding_only_for_unchanged_active_input(catalog_database) -> None:
+    connection_factory, repository_id = catalog_database
+    record = {
+        "oai_identifier": "oai:legacy:embedding-contract",
+        "title": "Stable title",
+        "abstract": "Stable abstract",
+        "date": "2024-01-02",
+        "source_url": "https://example.test/initial",
+        "authors": [],
+    }
+    connection = connection_factory()
+    try:
+        legacy_insert_publication(connection, repository_id, record)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE publication
+                SET embedding = %s::vector
+                WHERE repository_id = %s AND oai_identifier = %s
+                RETURNING id
+                """,
+                ("[" + ",".join(["0.001"] * 1024) + "]", repository_id, record["oai_identifier"]),
+            )
+            publication_id = cursor.fetchone()[0]
+        connection.commit()
+
+        unchanged_input = {**record, "source_url": "https://example.test/updated"}
+        legacy_insert_publication(connection, repository_id, unchanged_input)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT embedding IS NOT NULL, is_active FROM publication WHERE id = %s",
+                (publication_id,),
+            )
+            assert cursor.fetchone() == (True, True)
+
+        changed_title = {**unchanged_input, "title": "Changed title"}
+        legacy_insert_publication(connection, repository_id, changed_title)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT embedding IS NULL FROM publication WHERE id = %s", (publication_id,))
+            assert cursor.fetchone() == (True,)
+            cursor.execute(
+                "UPDATE publication SET embedding = %s::vector WHERE id = %s",
+                ("[" + ",".join(["0.002"] * 1024) + "]", publication_id),
+            )
+        connection.commit()
+
+        changed_abstract = {**changed_title, "abstract": "Changed abstract"}
+        legacy_insert_publication(connection, repository_id, changed_abstract)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT embedding IS NULL FROM publication WHERE id = %s", (publication_id,))
+            assert cursor.fetchone() == (True,)
+            cursor.execute(
+                "UPDATE publication SET embedding = %s::vector, is_active = FALSE WHERE id = %s",
+                ("[" + ",".join(["0.003"] * 1024) + "]", publication_id),
+            )
+        connection.commit()
+
+        legacy_insert_publication(connection, repository_id, changed_abstract)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT embedding IS NULL, is_active FROM publication WHERE id = %s",
+                (publication_id,),
+            )
+            assert cursor.fetchone() == (True, True)
     finally:
         connection.close()
 
