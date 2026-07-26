@@ -72,7 +72,11 @@ def job_from_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
         "parsed_records": row[11] if len(row) > 11 else None,
         "skipped_records": row[12] if len(row) > 12 else None,
         "deleted_records": row[13] if len(row) > 13 else None,
-        "pages_processed": row[14] if len(row) > 14 else None,
+        "deactivated_records": row[14] if len(row) > 14 else None,
+        "unknown_tombstones": row[15] if len(row) > 15 else None,
+        "already_inactive_tombstones": row[16] if len(row) > 16 else None,
+        "invalid_tombstones": row[17] if len(row) > 17 else None,
+        "pages_processed": row[18] if len(row) > 18 else None,
     }
 
 
@@ -149,6 +153,10 @@ def ensure_schema() -> None:
                     parsed_records INTEGER,
                     skipped_records INTEGER,
                     deleted_records INTEGER,
+                    deactivated_records INTEGER,
+                    unknown_tombstones INTEGER,
+                    already_inactive_tombstones INTEGER,
+                    invalid_tombstones INTEGER,
                     pages_processed INTEGER,
                     message TEXT NOT NULL,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -177,6 +185,14 @@ def ensure_schema() -> None:
                     ADD COLUMN IF NOT EXISTS skipped_records INTEGER;
                 ALTER TABLE admin_job
                     ADD COLUMN IF NOT EXISTS deleted_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS deactivated_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS unknown_tombstones INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS already_inactive_tombstones INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS invalid_tombstones INTEGER;
                 ALTER TABLE admin_job
                     ADD COLUMN IF NOT EXISTS pages_processed INTEGER;
 
@@ -255,7 +271,8 @@ def jobs(
         SELECT id, job_type, repository_id, status, started_at, finished_at,
                processed_records, message, attempt_count, heartbeat_at,
                received_records, parsed_records, skipped_records,
-               deleted_records, pages_processed
+               deleted_records, deactivated_records, unknown_tombstones,
+               already_inactive_tombstones, invalid_tombstones, pages_processed
         FROM admin_job
     """
 
@@ -301,7 +318,8 @@ def create_job(job_type: str, repository_id: int | None, message: str) -> dict[s
                 RETURNING id, job_type, repository_id, status, started_at, finished_at,
                           processed_records, message, attempt_count, heartbeat_at,
                           received_records, parsed_records, skipped_records,
-                          deleted_records, pages_processed
+                          deleted_records, deactivated_records, unknown_tombstones,
+                          already_inactive_tombstones, invalid_tombstones, pages_processed
                 """,
                 (job_type, repository_id, message),
             )

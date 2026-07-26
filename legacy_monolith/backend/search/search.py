@@ -55,7 +55,8 @@ def fetch_vector_results(query_vector, limit, year_from, year_to):
         LEFT JOIN repository r ON r.id = p.repository_id
         LEFT JOIN publication_author pa ON pa.publication_id = p.id
         LEFT JOIN author a ON a.id = pa.author_id
-        WHERE p.embedding IS NOT NULL
+        WHERE p.is_active = TRUE
+          AND p.embedding IS NOT NULL
     """
 
     params = [query_vector]

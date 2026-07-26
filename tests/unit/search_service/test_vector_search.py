@@ -35,6 +35,7 @@ def test_production_vector_search_retains_existing_ordering() -> None:
     assert "ORDER BY cosine_distance ASC\n" in connection.last_cursor.sql
     assert "ORDER BY ranked.cosine_distance ASC\n" in connection.last_cursor.sql
     assert "cosine_distance ASC, id ASC" not in connection.last_cursor.sql
+    assert "WHERE is_active = TRUE" in connection.last_cursor.sql
 
 
 def test_evaluation_vector_search_adds_deterministic_id_tie_breaker() -> None:

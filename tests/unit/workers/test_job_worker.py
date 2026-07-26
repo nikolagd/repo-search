@@ -252,6 +252,64 @@ def test_sync_publication_persists_embedding_and_provenance(monkeypatch: pytest.
     assert calls[1][2] == provenance
 
 
+def test_tombstone_processing_distinguishes_catalog_outcomes_and_invalid_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            {"status": "deactivated", "publication_id": 1, "observation_count": 1},
+            {"status": "unknown", "publication_id": None, "observation_count": 1},
+            {"status": "already_inactive", "publication_id": 1, "observation_count": 2},
+        ]
+    )
+    payloads: list[dict[str, Any]] = []
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def request(_method: str, _url: str, **kwargs):
+        payloads.append(kwargs["json"])
+        return next(responses)
+
+    monkeypatch.setattr(job_worker, "request_json", request)
+    monkeypatch.setattr(
+        job_worker,
+        "emit_app_event",
+        lambda event, _service, **fields: events.append((event, fields)),
+    )
+    statistics = job_worker.HarvestStatistics(deleted_records=4)
+    job = {"id": 13}
+
+    for identifier in ("oai:test:active", "oai:test:unknown", "oai:test:inactive"):
+        job_worker.process_tombstone(
+            job,
+            5,
+            job_worker.OAITombstone(identifier, "2026-07-25", ("publications",)),
+            statistics,
+        )
+    job_worker.process_tombstone(
+        job,
+        5,
+        job_worker.OAITombstone(None, "2026-07-25", ()),
+        statistics,
+    )
+
+    assert statistics.deactivated_records == 1
+    assert statistics.unknown_tombstones == 1
+    assert statistics.already_inactive_tombstones == 1
+    assert statistics.invalid_tombstones == 1
+    assert len(payloads) == 3
+    assert payloads[0] == {
+        "oai_identifier": "oai:test:active",
+        "datestamp": "2026-07-25",
+        "set_specs": ["publications"],
+    }
+    assert [event for event, _fields in events] == [
+        "job.harvest_tombstone_processed",
+        "job.harvest_tombstone_processed",
+        "job.harvest_tombstone_processed",
+        "job.harvest_tombstone_invalid",
+    ]
+
+
 def test_harvest_accumulates_absolute_statistics_over_multiple_pages(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -288,6 +346,7 @@ def test_harvest_accumulates_absolute_statistics_over_multiple_pages(
     </OAI-PMH>"""
     fetched_tokens: list[str | None] = []
     persisted_identifiers: list[str] = []
+    tombstone_payloads: list[dict[str, Any]] = []
     updates: list[job_worker.HarvestStatistics] = []
 
     def fetch(resumption_token=None, **_kwargs):
@@ -305,6 +364,9 @@ def test_harvest_accumulates_absolute_statistics_over_multiple_pages(
         if method == "POST" and url.endswith("/publications"):
             persisted_identifiers.append(kwargs["json"]["oai_identifier"])
             return {"id": len(persisted_identifiers)}
+        if method == "POST" and url.endswith("/repositories/5/tombstones"):
+            tombstone_payloads.append(kwargs["json"])
+            return {"status": "unknown", "publication_id": None, "observation_count": 1}
         if method == "POST" and url.endswith("/repositories/5/last-harvest"):
             return {"status": "ok"}
         raise AssertionError(f"Unexpected request: {method} {url}")
@@ -333,11 +395,15 @@ def test_harvest_accumulates_absolute_statistics_over_multiple_pages(
         parsed_records=2,
         skipped_records=2,
         deleted_records=1,
+        unknown_tombstones=1,
         processed_records=2,
         pages_processed=2,
     )
     assert fetched_tokens == [None, "page-two"]
     assert persisted_identifiers == ["oai:test:1", "oai:test:2"]
+    assert tombstone_payloads == [
+        {"oai_identifier": "oai:test:deleted", "datestamp": None, "set_specs": []}
+    ]
     assert updates[-1] == statistics
     assert [update.pages_processed for update in updates] == [1, 1, 2, 2]
     assert [update.processed_records for update in updates] == [0, 1, 1, 2]

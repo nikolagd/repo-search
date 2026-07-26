@@ -21,8 +21,16 @@ DATE_VALUE_PATTERNS = [
 
 
 @dataclass(frozen=True)
+class OAITombstone:
+    oai_identifier: str | None
+    datestamp: str | None
+    set_specs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class OAIPageResult:
     records: list[dict]
+    tombstones: list[OAITombstone]
     resumption_token: str | None
     received_records: int
     parsed_records: int
@@ -86,6 +94,22 @@ def get_oai_identifier(record):
         return None
     identifier_el = header.find("oai:identifier", NS)
     return identifier_el.text.strip() if identifier_el is not None and identifier_el.text else None
+
+
+def get_header_text(header, tag):
+    element = header.find(f"oai:{tag}", NS)
+    if element is None or not element.text:
+        return None
+    value = element.text.strip()
+    return value or None
+
+
+def parse_tombstone(header) -> OAITombstone:
+    return OAITombstone(
+        oai_identifier=get_header_text(header, "identifier"),
+        datestamp=get_header_text(header, "datestamp"),
+        set_specs=tuple(get_texts(header, "oai:setSpec")),
+    )
 
 
 def build_record(oai_identifier, title, authors, date, abstract, identifiers, subjects, languages):
@@ -222,6 +246,7 @@ def has_usable_metadata(record: dict) -> bool:
 def parse_oai_page(xml_text: str, metadata_prefix="oai_dc") -> OAIPageResult:
     root = ET.fromstring(xml_text)
     parsed_records = []
+    tombstones = []
     skipped_records = 0
     deleted_records = 0
     record_elements = root.findall(".//oai:record", NS)
@@ -230,6 +255,7 @@ def parse_oai_page(xml_text: str, metadata_prefix="oai_dc") -> OAIPageResult:
         header = record.find("oai:header", NS)
         if header is not None and header.get("status") == "deleted":
             deleted_records += 1
+            tombstones.append(parse_tombstone(header))
             continue
 
         metadata = record.find("oai:metadata", NS)
@@ -253,6 +279,7 @@ def parse_oai_page(xml_text: str, metadata_prefix="oai_dc") -> OAIPageResult:
     token = token_el.text.strip() if token_el is not None and token_el.text else None
     return OAIPageResult(
         records=parsed_records,
+        tombstones=tombstones,
         resumption_token=token,
         received_records=len(record_elements),
         parsed_records=len(parsed_records),

@@ -12,7 +12,8 @@ def fetch_missing_publications(conn):
         cur.execute("""
             SELECT id, title, abstract
             FROM publication
-            WHERE embedding IS NULL
+            WHERE is_active = TRUE
+              AND embedding IS NULL
         """)
         return cur.fetchall()
 

@@ -17,7 +17,8 @@ def execute_vector_search(
             SELECT id, repository_id, title, abstract, source_url, date,
                    embedding <=> %s::vector AS cosine_distance
             FROM publication
-            WHERE embedding IS NOT NULL
+            WHERE is_active = TRUE
+              AND embedding IS NOT NULL
     """
     params: list[Any] = [query_vector]
 

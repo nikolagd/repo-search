@@ -47,14 +47,17 @@ def insert_publication(conn, repo_id, record):
                     title,
                     abstract,
                     date,
-                    source_url
+                    source_url,
+                    is_active
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (oai_identifier) DO UPDATE SET
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                ON CONFLICT (repository_id, oai_identifier) DO UPDATE SET
                     title = EXCLUDED.title,
                     abstract = EXCLUDED.abstract,
                     date = EXCLUDED.date,
-                    source_url = EXCLUDED.source_url
+                    source_url = EXCLUDED.source_url,
+                    is_active = TRUE,
+                    embedding = NULL
                 RETURNING id
                 """,
                 (
@@ -68,6 +71,17 @@ def insert_publication(conn, repo_id, record):
             )
 
             publication_id = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                UPDATE publication_tombstone
+                SET cleared_at = NOW()
+                WHERE repository_id = %s
+                  AND oai_identifier = %s
+                  AND cleared_at IS NULL
+                """,
+                (repo_id, record["oai_identifier"]),
+            )
 
             for author_full_name in record["authors"]:
                 cur.execute("""
