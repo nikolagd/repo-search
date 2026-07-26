@@ -11,6 +11,7 @@ import httpx
 
 from performance_measurement.common import (
     MeasurementError,
+    VerifiedRuntimeIdentity,
     build_metadata,
     format_utc,
     parse_timestamp,
@@ -23,6 +24,7 @@ from performance_measurement.common import (
     validate_common_config,
     validate_no_secrets,
     validate_url,
+    validate_verified_runtime_identity,
 )
 
 
@@ -64,6 +66,7 @@ def validate_cold_evidence(
     *,
     deployment_label: str,
     measurement_started_at: datetime,
+    maximum_age_seconds: float,
 ) -> dict[str, Any]:
     if not isinstance(evidence, dict):
         raise MeasurementError("cold classification requires external restart/readiness evidence")
@@ -85,11 +88,15 @@ def validate_cold_evidence(
         raise MeasurementError("cold evidence readiness precedes restart completion")
     if ready > measurement_started_at:
         raise MeasurementError("cold evidence readiness occurs after measurement start")
+    readiness_age_seconds = (measurement_started_at - ready).total_seconds()
+    if readiness_age_seconds > maximum_age_seconds:
+        raise MeasurementError("cold evidence readiness is older than the configured maximum age")
     return {
         "deployment_label": deployment_label,
         "source": source,
         "restart_completed_at_utc": format_utc(restarted),
         "readiness_confirmed_at_utc": format_utc(ready),
+        "readiness_age_seconds": readiness_age_seconds,
     }
 
 
@@ -105,6 +112,7 @@ def _validate_search_config(config: dict[str, Any]) -> dict[str, Any]:
         "measured_repetitions",
         "timeout_seconds",
         "run_classification",
+        "cold_evidence_max_age_seconds",
     }
     if set(search) - allowed:
         raise MeasurementError("search configuration contains unsupported fields")
@@ -124,6 +132,10 @@ def _validate_search_config(config: dict[str, Any]) -> dict[str, Any]:
         "measured_repetitions": measured,
         "timeout_seconds": require_positive_float(search.get("timeout_seconds", 180.0), "search.timeout_seconds"),
         "run_classification": classification,
+        "cold_evidence_max_age_seconds": require_positive_float(
+            search.get("cold_evidence_max_age_seconds"),
+            "search.cold_evidence_max_age_seconds",
+        ),
     }
 
 
@@ -160,7 +172,8 @@ def run_search_measurement(
     queries: list[SearchQuery],
     *,
     api_token: str,
-    git_commit: str,
+    runner_git_commit: str,
+    runtime_identity: VerifiedRuntimeIdentity,
     config_sha256: str,
     query_sha256: str,
     cold_evidence: dict[str, Any] | None = None,
@@ -170,6 +183,7 @@ def run_search_measurement(
     clock: Callable[[], datetime] = utc_now,
 ) -> dict[str, Any]:
     validated = _validate_search_config(config)
+    validate_verified_runtime_identity(config, runner_git_commit, runtime_identity)
     token = require_nonblank(api_token, "API token environment variable")
     if not queries:
         raise MeasurementError("at least one query is required")
@@ -180,6 +194,7 @@ def run_search_measurement(
             cold_evidence,
             deployment_label=validated["deployment_label"],
             measurement_started_at=started_at,
+            maximum_age_seconds=validated["cold_evidence_max_age_seconds"],
         )
     elif cold_evidence is not None:
         raise MeasurementError("cold evidence is only valid for a cold run")
@@ -284,19 +299,23 @@ def run_search_measurement(
     if cold_evidence_sha256 is not None:
         input_hashes["cold_evidence"] = cold_evidence_sha256
     return {
-        "metadata": build_metadata(
-            config,
-            measurement_type="search_latency",
-            git_commit=git_commit,
-            started_at=started_at,
-            finished_at=finished_at,
-            input_sha256=input_hashes,
-            repetitions={
-                "warmup": validated["warmup_repetitions"],
-                "measured": validated["measured_repetitions"],
-                "query_count": len(queries),
-            },
-        ),
+        "metadata": {
+            **build_metadata(
+                config,
+                measurement_type="search_latency",
+                runner_git_commit=runner_git_commit,
+                runtime_identity=runtime_identity,
+                started_at=started_at,
+                finished_at=finished_at,
+                input_sha256=input_hashes,
+                repetitions={
+                    "warmup": validated["warmup_repetitions"],
+                    "measured": validated["measured_repetitions"],
+                    "query_count": len(queries),
+                },
+            ),
+            "cold_evidence_max_age_seconds": validated["cold_evidence_max_age_seconds"],
+        },
         "endpoint": validated["endpoint"],
         "configured_classification": validated["run_classification"],
         "cold_evidence": evidence,

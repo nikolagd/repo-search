@@ -1,75 +1,218 @@
 # Runtime performance measurement
 
-This package creates reproducible measurement artifacts for search latency,
-Prometheus resources, and an existing embedding-backfill workflow. It is separate
-from `evaluation`: it does not calculate relevance metrics or modify search,
-ranking, embedding, or job behavior. The implementation and its synthetic tests
-are not accepted thesis performance results.
+This package provides reproducible tooling for later search-latency, Prometheus
+resource, and embedding-backfill measurements. It is separate from relevance
+evaluation and does not change search, ranking, embedding, or job behavior. Its
+synthetic tests and implementation are not thesis performance results.
 
-Run the CLI from the repository root:
+## Identity model and mandatory preflight
 
-```powershell
-$env:PERFORMANCE_API_TOKEN = "<runtime token>"
-.\.venv\Scripts\python.exe -m performance_measurement search --config .\config.json --queries .\queries.json --output-dir .\.codex-tmp\performance\compose-search
-.\.venv\Scripts\python.exe -m performance_measurement resources --config .\config.json --output-dir .\.codex-tmp\performance\compose-resources
-.\.venv\Scripts\python.exe -m performance_measurement backfill --config .\config.json --output-dir .\.codex-tmp\performance\compose-backfill
-Remove-Item Env:PERFORMANCE_API_TOKEN -ErrorAction SilentlyContinue
-```
+Every command performs runtime identity verification before a measurement timer,
+Prometheus query, or backfill creation. Reports keep four concepts separate:
 
-The output directory is never replaced unless `--overwrite` is explicit. JSON,
-CSV, Markdown, and `SHA256SUMS` are built in a temporary sibling directory and
-published as one atomic directory replacement. `.codex-tmp/performance` is
-reserved for later real run artifacts and must remain untracked.
+- `runner_git_commit` is the commit of the checkout executing this CLI. It is not
+  evidence of what is deployed.
+- `verified_deployment_identity` comes from a required, separately captured and
+  SHA-256-hashed deployment-evidence file. It records the deployed Git revision,
+  immutable image digests, runtime kind, evidence timestamp, and whether the
+  deployed revision matches the runner.
+- `configured_expectations` are the model name, embedding revision/template, and
+  LLM model requested by the measurement config.
+- `observed_runtime_model_identity` contains only those four observed runtime
+  fields plus the UTC verification timestamp.
 
-## Inputs and configuration
+For microservices, the preflight authenticates with `X-API-Key` to configurable
+Query Service and Embedding Service `/model/status` URLs. It compares Query
+Service `llm_model` and Embedding Service `embedding_model`,
+`embedding_model_revision`, and `embedding_template_version` with the configured
+expectations. Missing, malformed, or mismatched fields fail before measurement.
+Other status fields such as service URLs, devices, or initialization messages are
+not copied into the report.
 
-Search queries use this strict shape; query text is sent to the endpoint but is
-not copied into result artifacts:
+The current services do not expose their deployed Git or image identity, so an
+external deployment-evidence file is required for every command. A thesis-ready
+run additionally requires its full deployed Git revision to equal
+`runner_git_commit`. Set `thesis_ready` to `false` only for diagnostic runs; a
+revision mismatch is then recorded and cannot be presented as thesis-ready.
 
-```json
-{
-  "queries": [
-    {"id": "q01", "query": "example search", "limit": 10}
-  ]
-}
-```
+The legacy monolith has no equivalent runtime model-status contract. It therefore
+fails closed unless its external evidence also contains all four observed model
+fields. Missing embedding revision or template data is never filled from the
+runner checkout or current defaults.
 
-All commands require a deployment label and explicit model provenance. Optional
-corpus size/hash fields are retained when supplied. Credentials are prohibited
-in JSON and URLs; only the name of an environment variable is configured.
+Example microservices configuration:
 
 ```json
 {
   "deployment_label": "compose-gpu",
-  "models": {
+  "expected_models": {
     "embedding_model": "intfloat/multilingual-e5-large",
     "embedding_model_revision": "verified-revision",
     "embedding_template_version": "verified-template",
     "llm_model": "verified-llm-model"
   },
-  "corpus": {"size": 0, "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+  "runtime_identity": {
+    "runtime_kind": "microservices",
+    "thesis_ready": true,
+    "api_token_env": "PERFORMANCE_API_TOKEN",
+    "query_model_status_url": "http://localhost:8004/model/status",
+    "embedding_model_status_url": "http://localhost:8003/model/status",
+    "request_timeout_seconds": 30
+  },
+  "corpus": {
+    "size": 0,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
   "search": {
     "endpoint": "http://localhost:8000/api/search",
     "api_token_env": "PERFORMANCE_API_TOKEN",
     "warmup_repetitions": 1,
     "measured_repetitions": 10,
     "timeout_seconds": 180,
-    "run_classification": "warm"
+    "run_classification": "warm",
+    "cold_evidence_max_age_seconds": 120
+  }
+}
+```
+
+Required deployment evidence for microservices:
+
+```json
+{
+  "deployment_label": "compose-gpu",
+  "runtime_kind": "microservices",
+  "deployment_git_revision": "<full deployed Git revision>",
+  "image_identities": {
+    "query-service": "registry.example/query@sha256:<64 hexadecimal characters>",
+    "embedding-service": "registry.example/embedding@sha256:<64 hexadecimal characters>"
   },
+  "captured_at_utc": "2026-01-01T09:59:00Z",
+  "source": "external deployment inspection record"
+}
+```
+
+For `runtime_kind: legacy_monolith`, `runtime_identity` contains only
+`runtime_kind` and `thesis_ready`. Its evidence has the same base fields plus:
+
+```json
+{
+  "observed_runtime_models": {
+    "embedding_model": "externally verified model",
+    "embedding_model_revision": "externally verified revision",
+    "embedding_template_version": "externally verified template",
+    "llm_model": "externally verified LLM"
+  }
+}
+```
+
+## CLI and outputs
+
+API tokens are accepted only through configured environment-variable names. No
+token CLI argument exists, credential fields and credential-bearing URLs are
+rejected, and exact token values are scanned before publication.
+
+```powershell
+$env:PERFORMANCE_API_TOKEN = "<runtime token>"
+.\.venv\Scripts\python.exe -m performance_measurement search --config .\config.json --deployment-evidence .\deployment-evidence.json --queries .\queries.json --output-dir .\.codex-tmp\performance\compose-search
+.\.venv\Scripts\python.exe -m performance_measurement resources --config .\config.json --deployment-evidence .\deployment-evidence.json --output-dir .\.codex-tmp\performance\compose-resources
+.\.venv\Scripts\python.exe -m performance_measurement backfill --config .\config.json --deployment-evidence .\deployment-evidence.json --output-dir .\.codex-tmp\performance\compose-backfill
+Remove-Item Env:PERFORMANCE_API_TOKEN -ErrorAction SilentlyContinue
+```
+
+Each output directory contains `measurement.json`, `samples.csv`, `summary.md`,
+and `SHA256SUMS`. It is built in a temporary sibling directory and atomically
+published. Existing output is protected unless `--overwrite` is explicit.
+`.codex-tmp/performance` is reserved for later approved real runs and remains
+untracked.
+
+Search query input is strict and query text is not copied into outputs:
+
+```json
+{"queries": [{"id": "q01", "query": "example search", "limit": 10}]}
+```
+
+## Search latency and cold evidence
+
+Search requests are sequential and timed with `time.perf_counter_ns`. Raw rows
+retain phase, classification, query ID, repetition, outcome/status, HTTP status,
+nanosecond/millisecond latency, result count, parser mode, and a generic failure
+category. Warm-up rows never enter measured statistics. Failed requests remain
+explicit raw rows but are excluded from latency summaries.
+
+`warm` is the normal post-warm-up classification. `first_request` requires zero
+warm-ups and does not claim a cold system. `cold` requires zero warm-ups and a
+separate restart/readiness evidence file:
+
+```json
+{
+  "deployment_label": "compose-gpu",
+  "source": "external restart and readiness log",
+  "restart_completed_at_utc": "2026-01-01T10:00:00Z",
+  "readiness_confirmed_at_utc": "2026-01-01T10:01:00Z"
+}
+```
+
+Readiness must follow restart, must not be in the future, and must be no older at
+measurement start than configured `cold_evidence_max_age_seconds`. The bound and
+observed readiness age are retained in the report. The first request after valid
+evidence is `cold`; later requests are `warm`.
+
+Summaries contain attempted/successful/failed counts, mean, median, min, max, p50,
+and p95. Percentiles use deterministic nearest rank:
+`sorted_values[ceil(p*n)-1]`.
+
+## Prometheus resources
+
+Prometheus instant/range definitions are named and fully configurable; the tool
+does not hard-code deployment labels. Each definition must return at most one
+series. Multiple series fail with an instruction to aggregate or narrow the
+PromQL expression, so values from different label sets are never pooled.
+
+Example configuration section:
+
+```json
+{
   "prometheus": {
     "base_url": "http://localhost:9090",
     "timeout_seconds": 30,
     "metrics": [
-      {"name": "container_cpu", "metric_type": "cpu", "unit": "cores", "query_kind": "query", "query": "<deployment-specific PromQL>"},
-      {"name": "working_set", "metric_type": "ram", "unit": "bytes", "query_kind": "query_range", "query": "<deployment-specific PromQL>", "start": "<RFC3339 or epoch>", "end": "<RFC3339 or epoch>", "step": "15s"},
-      {"name": "gpu_util", "metric_type": "gpu_utilization", "unit": "percent", "query_kind": "query", "query": "<DCGM_FI_DEV_GPU_UTIL PromQL>"},
-      {"name": "gpu_framebuffer", "metric_type": "gpu_framebuffer", "unit": "bytes", "query_kind": "query", "query": "<DCGM framebuffer PromQL>"}
+      {
+        "name": "query_cpu_rate",
+        "metric_type": "cpu",
+        "unit": "cores",
+        "query_kind": "query",
+        "query": "sum(rate(container_cpu_usage_seconds_total{container=\"query-service\"}[1m]))"
+      }
     ]
-  },
+  }
+}
+```
+
+If Prometheus is authenticated, set `api_token_env` in this section. The token
+is sent as a bearer token and is never written to the report.
+
+The accepted label set and series count are recorded with each metric summary.
+Raw timestamp/value/labels are retained. Empty or failed CPU, RAM, GPU utilization,
+or GPU framebuffer queries are `unavailable` with null summaries, never zero.
+Non-finite samples invalidate the run.
+
+## Embedding backfill and comparability
+
+Backfill preflight finishes before the command creates one existing Job Service
+`embedding_backfill` job and polls its ID to a terminal state. It records observed
+queue time, service start/finish, attempts, processed records, service/observed
+duration, and records per second. The tool never harvests data or manufactures
+stale embeddings. Because Job Service timestamps are timezone-naive PostgreSQL
+values, config must explicitly set `job_timestamp_timezone: UTC`.
+
+Example configuration section:
+
+```json
+{
   "backfill": {
-    "job_service_url": "http://localhost:8006",
+    "job_service_url": "http://localhost:8002",
     "api_token_env": "PERFORMANCE_API_TOKEN",
-    "poll_interval_seconds": 2,
+    "poll_interval_seconds": 1,
     "timeout_seconds": 3600,
     "request_timeout_seconds": 30,
     "job_timestamp_timezone": "UTC"
@@ -77,53 +220,9 @@ in JSON and URLs; only the name of an environment variable is configured.
 }
 ```
 
-Prometheus labels and queries are never hard-coded by the package. Instant
-vectors, range matrices, and scalars retain each raw timestamp, value, and label
-set. Summaries contain sample count, mean, median, min, max, p50, and p95. Empty,
-failed, CPU, RAM, or GPU queries are `unavailable` with null summaries, never
-zero. Non-finite samples invalidate the run.
-
-## Latency and cold/warm rules
-
-Requests are sequential and use `time.perf_counter_ns`. Raw rows retain phase,
-query ID, repetition, HTTP status, outcome, nanosecond/millisecond latency,
-result count, and parser mode. Warm-up rows are never included in measured
-statistics. Failed HTTP, transport, and response-validation samples remain raw
-rows and are counted as failed, but do not enter latency percentiles.
-
-`warm` is the normal post-warm-up classification. `first_request` is allowed only
-with zero warm-ups and does not claim a cold system. `cold` also requires zero
-warm-ups plus a separate `--cold-evidence` JSON file created from an external
-restart/readiness procedure:
-
-```json
-{
-  "deployment_label": "compose-gpu",
-  "source": "restart/readiness command log and operator record",
-  "restart_completed_at_utc": "2026-01-01T10:00:00Z",
-  "readiness_confirmed_at_utc": "2026-01-01T10:01:00Z"
-}
-```
-
-The first request after valid evidence is `cold`; later requests are `warm`.
-Without that evidence the CLI refuses `cold`, so process position alone cannot
-create a cold claim. Percentiles use the same deterministic nearest-rank rule as
-evaluation: sort values and select `ceil(p*n)-1`.
-
-## Embedding backfill and comparability
-
-The backfill command creates one Job Service `embedding_backfill` job and polls
-its ID to a terminal state. It records observed queue time, service start/finish,
-attempt count, processed records, service and observed duration, and records per
-second. Existing Job Service timestamps are timezone-naive PostgreSQL values, so
-the config must explicitly assert `job_timestamp_timezone: UTC`. The tool never
-harvests data or manufactures stale embeddings merely to make a run possible.
-
-Compose, Kubernetes, and monolith runs remain comparable only when query/config
-hashes, Git commit, corpus identity, model provenance, repetition counts,
-percentile convention, endpoint semantics, and measurement windows are matched.
-Deployment labels identify environments but do not alter query ordering or
-payloads. Resource summaries aggregate configured Prometheus series; they do not
-make differently scoped PromQL expressions comparable. Cold evidence, readiness
-criteria, machine contention, caches, GPU clocks, and monitoring scrape intervals
-must be reviewed with every future real run.
+Compose, Kubernetes, and monolith runs are comparable only when deployment
+evidence, query/config hashes, runner and deployed revisions, corpus identity,
+configured and observed models, repetitions, endpoint semantics, PromQL scope,
+and measurement windows match. Scrape intervals, readiness criteria, machine
+contention, cache state, GPU clocks, and cold-evidence age remain review items for
+every future real run.

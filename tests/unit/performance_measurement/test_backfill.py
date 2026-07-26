@@ -14,12 +14,13 @@ pytestmark = pytest.mark.unit
 def _config():
     return {
         "deployment_label": "compose",
-        "models": {
+        "expected_models": {
             "embedding_model": "embedding",
             "embedding_model_revision": "revision",
             "embedding_template_version": "template",
             "llm_model": "llm",
         },
+        "runtime_identity": {},
         "backfill": {
             "job_service_url": "https://jobs.example.test",
             "api_token_env": "PERFORMANCE_API_TOKEN",
@@ -54,7 +55,7 @@ def _job(status: str, *, processed=None, attempts=1):
     }
 
 
-def test_backfill_polling_success_and_throughput() -> None:
+def test_backfill_polling_success_and_throughput(runner_git_commit, verified_runtime_identity) -> None:
     polls = iter([[_job("running", processed=4)], [_job("succeeded", processed=10)]])
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -65,7 +66,8 @@ def test_backfill_polling_success_and_throughput() -> None:
     report = run_backfill_measurement(
         _config(),
         api_token="sentinel-token",
-        git_commit="abc",
+        runner_git_commit=runner_git_commit,
+        runtime_identity=verified_runtime_identity,
         config_sha256="a" * 64,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
         clock=StepClock(),
@@ -80,14 +82,15 @@ def test_backfill_polling_success_and_throughput() -> None:
     assert report["job"]["started_at_utc"].endswith("Z")
 
 
-def test_backfill_terminal_failure_is_retained_without_throughput() -> None:
+def test_backfill_terminal_failure_is_retained_without_throughput(runner_git_commit, verified_runtime_identity) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_job("queued", attempts=0)) if request.method == "POST" else httpx.Response(200, json=[_job("failed", processed=3, attempts=2)])
 
     report = run_backfill_measurement(
         _config(),
         api_token="token",
-        git_commit="abc",
+        runner_git_commit=runner_git_commit,
+        runtime_identity=verified_runtime_identity,
         config_sha256="a" * 64,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
         clock=StepClock(),

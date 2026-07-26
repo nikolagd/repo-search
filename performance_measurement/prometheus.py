@@ -10,6 +10,7 @@ import httpx
 
 from performance_measurement.common import (
     MeasurementError,
+    VerifiedRuntimeIdentity,
     build_metadata,
     require_nonblank,
     sha256_file,
@@ -17,6 +18,7 @@ from performance_measurement.common import (
     utc_now,
     validate_common_config,
     validate_url,
+    validate_verified_runtime_identity,
 )
 
 
@@ -30,6 +32,13 @@ class PrometheusDefinition:
     start: str | float | None = None
     end: str | float | None = None
     step: str | float | None = None
+
+
+@dataclass(frozen=True)
+class ParsedPrometheusResult:
+    samples: list[dict[str, Any]]
+    accepted_labels: dict[str, str] | None
+    series_count: int
 
 
 def _range_value(value: Any, field: str) -> str | float:
@@ -102,7 +111,15 @@ def _validate_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[Prome
     )
 
 
-def _sample(timestamp: Any, value: Any, *, definition: PrometheusDefinition, labels: dict[str, Any]) -> dict[str, Any]:
+def _labels(labels: Any, definition: PrometheusDefinition) -> dict[str, str]:
+    if not isinstance(labels, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in labels.items()):
+        raise MeasurementError(f"Prometheus metric {definition.name} contains invalid labels")
+    normalized_labels = dict(labels)
+    normalized_labels.pop("__name__", None)
+    return dict(sorted(normalized_labels.items()))
+
+
+def _sample(timestamp: Any, value: Any, *, definition: PrometheusDefinition, labels: dict[str, str]) -> dict[str, Any]:
     try:
         parsed_timestamp = float(timestamp)
         parsed_value = float(value)
@@ -110,22 +127,18 @@ def _sample(timestamp: Any, value: Any, *, definition: PrometheusDefinition, lab
         raise MeasurementError(f"Prometheus metric {definition.name} contains a non-numeric sample") from exc
     if not math.isfinite(parsed_timestamp) or not math.isfinite(parsed_value):
         raise MeasurementError(f"Prometheus metric {definition.name} contains a non-finite sample")
-    if not isinstance(labels, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in labels.items()):
-        raise MeasurementError(f"Prometheus metric {definition.name} contains invalid labels")
-    normalized_labels = dict(labels)
-    normalized_labels.pop("__name__", None)
     return {
         "metric_name": definition.name,
         "metric_type": definition.metric_type,
         "unit": definition.unit,
         "query_kind": definition.query_kind,
-        "labels": dict(sorted(normalized_labels.items())),
+        "labels": labels,
         "timestamp": parsed_timestamp,
         "value": parsed_value,
     }
 
 
-def parse_prometheus_payload(payload: Any, definition: PrometheusDefinition) -> list[dict[str, Any]]:
+def parse_prometheus_payload(payload: Any, definition: PrometheusDefinition) -> ParsedPrometheusResult:
     if not isinstance(payload, dict) or payload.get("status") != "success":
         raise MeasurementError(f"Prometheus metric {definition.name} returned an unsuccessful payload")
     data = payload.get("data")
@@ -134,33 +147,54 @@ def parse_prometheus_payload(payload: Any, definition: PrometheusDefinition) -> 
     result_type = data["resultType"]
     result = data.get("result")
     samples = []
+    accepted_labels = None
+    series_count = 0
     if result_type == "vector":
         if not isinstance(result, list):
             raise MeasurementError(f"Prometheus metric {definition.name} returned a malformed vector")
+        series_count = len(result)
+        if series_count > 1:
+            raise MeasurementError(
+                f"Prometheus metric {definition.name} returned multiple series; aggregate or narrow the PromQL expression"
+            )
         for series in result:
             if not isinstance(series, dict) or not isinstance(series.get("value"), list) or len(series["value"]) != 2:
                 raise MeasurementError(f"Prometheus metric {definition.name} returned a malformed vector sample")
-            samples.append(_sample(*series["value"], definition=definition, labels=series.get("metric", {})))
+            accepted_labels = _labels(series.get("metric", {}), definition)
+            samples.append(_sample(*series["value"], definition=definition, labels=accepted_labels))
     elif result_type == "matrix":
         if not isinstance(result, list):
             raise MeasurementError(f"Prometheus metric {definition.name} returned a malformed matrix")
+        series_count = len(result)
+        if series_count > 1:
+            raise MeasurementError(
+                f"Prometheus metric {definition.name} returned multiple series; aggregate or narrow the PromQL expression"
+            )
         for series in result:
             if not isinstance(series, dict) or not isinstance(series.get("values"), list):
                 raise MeasurementError(f"Prometheus metric {definition.name} returned a malformed series")
+            accepted_labels = _labels(series.get("metric", {}), definition)
             for value in series["values"]:
                 if not isinstance(value, list) or len(value) != 2:
                     raise MeasurementError(f"Prometheus metric {definition.name} returned a malformed range sample")
-                samples.append(_sample(*value, definition=definition, labels=series.get("metric", {})))
+                samples.append(_sample(*value, definition=definition, labels=accepted_labels))
     elif result_type == "scalar":
         if not isinstance(result, list) or len(result) != 2:
             raise MeasurementError(f"Prometheus metric {definition.name} returned a malformed scalar")
-        samples.append(_sample(*result, definition=definition, labels={}))
+        series_count = 1
+        accepted_labels = {}
+        samples.append(_sample(*result, definition=definition, labels=accepted_labels))
     else:
         raise MeasurementError(f"Prometheus metric {definition.name} returned unsupported result type")
-    return samples
+    return ParsedPrometheusResult(samples, accepted_labels, series_count)
 
 
-def _unavailable(definition: PrometheusDefinition, reason: str) -> dict[str, Any]:
+def _unavailable(
+    definition: PrometheusDefinition,
+    reason: str,
+    *,
+    series_count: int | None = None,
+) -> dict[str, Any]:
     return {
         "name": definition.name,
         "metric_type": definition.metric_type,
@@ -168,6 +202,8 @@ def _unavailable(definition: PrometheusDefinition, reason: str) -> dict[str, Any
         "query_kind": definition.query_kind,
         "availability": "unavailable",
         "unavailable_reason": reason,
+        "accepted_labels": None,
+        "series_count": series_count,
         "sample_count": 0,
         "mean": None,
         "median": None,
@@ -182,12 +218,14 @@ def collect_resources(
     config: dict[str, Any],
     *,
     api_token: str | None,
-    git_commit: str,
+    runner_git_commit: str,
+    runtime_identity: VerifiedRuntimeIdentity,
     config_sha256: str,
     client: httpx.Client | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> dict[str, Any]:
     validated, definitions = _validate_config(config)
+    validate_verified_runtime_identity(config, runner_git_commit, runtime_identity)
     if validated["api_token_env"] is not None and not api_token:
         raise MeasurementError("configured Prometheus API token environment variable is not set")
     started_at = clock()
@@ -224,17 +262,17 @@ def collect_resources(
                 summaries.append(_unavailable(definition, "malformed_json"))
                 continue
             try:
-                samples = parse_prometheus_payload(payload, definition)
+                parsed = parse_prometheus_payload(payload, definition)
             except MeasurementError as exc:
                 if "unsuccessful payload" in str(exc):
                     summaries.append(_unavailable(definition, "prometheus_error"))
                     continue
                 raise
-            if not samples:
-                summaries.append(_unavailable(definition, "no_samples"))
+            if not parsed.samples:
+                summaries.append(_unavailable(definition, "no_samples", series_count=parsed.series_count))
                 continue
-            raw_samples.extend(samples)
-            summary = summarize_values([sample["value"] for sample in samples])
+            raw_samples.extend(parsed.samples)
+            summary = summarize_values([sample["value"] for sample in parsed.samples])
             summaries.append(
                 {
                     "name": definition.name,
@@ -243,6 +281,8 @@ def collect_resources(
                     "query_kind": definition.query_kind,
                     "availability": "available",
                     "unavailable_reason": None,
+                    "accepted_labels": parsed.accepted_labels,
+                    "series_count": parsed.series_count,
                     **{key: value for key, value in summary.items() if key not in {"attempted_sample_count", "failed_sample_count"}},
                 }
             )
@@ -254,7 +294,8 @@ def collect_resources(
         "metadata": build_metadata(
             config,
             measurement_type="resources",
-            git_commit=git_commit,
+            runner_git_commit=runner_git_commit,
+            runtime_identity=runtime_identity,
             started_at=started_at,
             finished_at=finished_at,
             input_sha256={"config": config_sha256},

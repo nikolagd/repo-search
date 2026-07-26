@@ -47,21 +47,23 @@ def test_hashes_are_canonical_and_independent_of_key_order() -> None:
     assert len(canonical_sha256({"value": math.pi})) == 64
 
 
-def test_metadata_is_deterministic_for_equal_inputs() -> None:
+def test_metadata_is_deterministic_for_equal_inputs(runner_git_commit, verified_runtime_identity) -> None:
     config = {
         "deployment_label": "compose",
-        "models": {
+        "expected_models": {
             "embedding_model": "embedding",
             "embedding_model_revision": "revision",
             "embedding_template_version": "template",
             "llm_model": "llm",
         },
+        "runtime_identity": {},
     }
     timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
     first = build_metadata(
         config,
         measurement_type="search_latency",
-        git_commit="abc",
+        runner_git_commit=runner_git_commit,
+        runtime_identity=verified_runtime_identity,
         started_at=timestamp,
         finished_at=timestamp,
         input_sha256={"queries": "b" * 64, "config": "a" * 64},
@@ -70,15 +72,20 @@ def test_metadata_is_deterministic_for_equal_inputs() -> None:
     second = build_metadata(
         config,
         measurement_type="search_latency",
-        git_commit="abc",
+        runner_git_commit=runner_git_commit,
+        runtime_identity=verified_runtime_identity,
         started_at=timestamp,
         finished_at=timestamp,
         input_sha256={"config": "a" * 64, "queries": "b" * 64},
         repetitions={"warmup": 1, "measured": 2},
     )
     assert first == second
-    assert list(first["input_sha256"]) == ["config", "queries"]
+    assert list(first["input_sha256"]) == ["config", "deployment_evidence", "queries"]
     assert list(first["repetitions"]) == ["measured", "warmup"]
+    assert first["runner_git_commit"] == runner_git_commit
+    assert first["configured_expectations"]["llm_model"] == "llm"
+    assert first["verified_deployment_identity"]["deployment_git_revision"] == runner_git_commit
+    assert first["observed_runtime_model_identity"]["embedding_model_revision"] == "revision"
 
 
 def test_secret_fields_and_credential_urls_are_rejected_without_echoing_values() -> None:

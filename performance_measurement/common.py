@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean, median
@@ -11,6 +12,12 @@ from urllib.parse import parse_qsl, urlsplit
 
 
 PERCENTILE_CONVENTION = "nearest-rank: sorted_values[ceil(p*n)-1]"
+EXPECTED_MODEL_FIELDS = (
+    "embedding_model",
+    "embedding_model_revision",
+    "embedding_template_version",
+    "llm_model",
+)
 _ALLOWED_SECRET_REFERENCE_KEYS = {"api_token_env"}
 _SENSITIVE_KEY_PARTS = (
     "password",
@@ -37,6 +44,35 @@ _SENSITIVE_QUERY_PARTS = (
 
 class MeasurementError(ValueError):
     """Raised when measurement inputs or observed data are unsafe or invalid."""
+
+
+@dataclass(frozen=True)
+class VerifiedRuntimeIdentity:
+    deployment_label: str
+    runtime_kind: str
+    deployment_git_revision: str
+    image_identities: tuple[tuple[str, str], ...]
+    evidence_sha256: str
+    evidence_captured_at_utc: str
+    revision_matches_runner: bool
+    thesis_ready: bool
+    observed_models: tuple[tuple[str, str], ...]
+    verified_at_utc: str
+
+    def deployment_metadata(self) -> dict[str, Any]:
+        return {
+            "deployment_label": self.deployment_label,
+            "runtime_kind": self.runtime_kind,
+            "deployment_git_revision": self.deployment_git_revision,
+            "image_identities": dict(self.image_identities),
+            "evidence_sha256": self.evidence_sha256,
+            "evidence_captured_at_utc": self.evidence_captured_at_utc,
+            "revision_matches_runner": self.revision_matches_runner,
+            "thesis_ready": self.thesis_ready,
+        }
+
+    def observed_model_metadata(self) -> dict[str, str]:
+        return {**dict(self.observed_models), "verified_at_utc": self.verified_at_utc}
 
 
 def utc_now() -> datetime:
@@ -188,24 +224,28 @@ def require_positive_float(value: Any, field: str) -> float:
 
 def validate_common_config(config: dict[str, Any]) -> dict[str, Any]:
     validate_no_secrets(config)
-    if set(config) - {"deployment_label", "models", "corpus", "search", "prometheus", "backfill"}:
+    if set(config) - {
+        "deployment_label",
+        "expected_models",
+        "runtime_identity",
+        "corpus",
+        "search",
+        "prometheus",
+        "backfill",
+    }:
         raise MeasurementError("measurement configuration contains unsupported top-level fields")
     deployment_label = require_nonblank(config.get("deployment_label"), "deployment_label")
-    models = config.get("models")
+    models = config.get("expected_models")
     if not isinstance(models, dict):
-        raise MeasurementError("models must be a JSON object")
-    required_model_fields = (
-        "embedding_model",
-        "embedding_model_revision",
-        "embedding_template_version",
-        "llm_model",
-    )
-    if set(models) != set(required_model_fields):
-        raise MeasurementError("models must contain exactly the required provenance fields")
+        raise MeasurementError("expected_models must be a JSON object")
+    if set(models) != set(EXPECTED_MODEL_FIELDS):
+        raise MeasurementError("expected_models must contain exactly the required provenance fields")
     normalized_models = {
-        field: require_nonblank(models.get(field), f"models.{field}")
-        for field in required_model_fields
+        field: require_nonblank(models.get(field), f"expected_models.{field}")
+        for field in EXPECTED_MODEL_FIELDS
     }
+    if not isinstance(config.get("runtime_identity"), dict):
+        raise MeasurementError("runtime_identity must be a JSON object")
     corpus = config.get("corpus")
     normalized_corpus = None
     if corpus is not None:
@@ -224,7 +264,7 @@ def validate_common_config(config: dict[str, Any]) -> dict[str, Any]:
             raise MeasurementError("corpus contains unsupported fields")
     return {
         "deployment_label": deployment_label,
-        "models": normalized_models,
+        "expected_models": normalized_models,
         "corpus": normalized_corpus,
     }
 
@@ -233,14 +273,15 @@ def build_metadata(
     config: dict[str, Any],
     *,
     measurement_type: str,
-    git_commit: str,
+    runner_git_commit: str,
+    runtime_identity: VerifiedRuntimeIdentity,
     started_at: datetime,
     finished_at: datetime,
     input_sha256: dict[str, str],
     repetitions: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     common = validate_common_config(config)
-    commit = require_nonblank(git_commit, "git_commit")
+    commit = validate_verified_runtime_identity(config, runner_git_commit, runtime_identity)
     if finished_at < started_at:
         raise MeasurementError("measurement finish timestamp precedes its start timestamp")
     normalized_hashes = {}
@@ -256,14 +297,21 @@ def build_metadata(
             require_nonblank(name, "repetition name"): require_positive_int(value, f"repetitions.{name}", allow_zero=True)
             for name, value in repetitions.items()
         }
+    evidence_hash = runtime_identity.evidence_sha256
+    existing_evidence_hash = normalized_hashes.get("deployment_evidence")
+    if existing_evidence_hash is not None and existing_evidence_hash != evidence_hash:
+        raise MeasurementError("deployment evidence hash does not match the verified runtime identity")
+    normalized_hashes["deployment_evidence"] = evidence_hash
     metadata = {
         "schema_version": 1,
         "measurement_type": require_nonblank(measurement_type, "measurement_type"),
-        "git_commit": commit,
+        "runner_git_commit": commit,
         "started_at_utc": format_utc(started_at),
         "finished_at_utc": format_utc(finished_at),
         "deployment_label": common["deployment_label"],
-        "models": common["models"],
+        "configured_expectations": common["expected_models"],
+        "verified_deployment_identity": runtime_identity.deployment_metadata(),
+        "observed_runtime_model_identity": runtime_identity.observed_model_metadata(),
         "input_sha256": dict(sorted(normalized_hashes.items())),
         "percentile_convention": PERCENTILE_CONVENTION,
     }
@@ -272,3 +320,26 @@ def build_metadata(
     if normalized_repetitions is not None:
         metadata["repetitions"] = dict(sorted(normalized_repetitions.items()))
     return metadata
+
+
+def validate_verified_runtime_identity(
+    config: dict[str, Any],
+    runner_git_commit: str,
+    runtime_identity: VerifiedRuntimeIdentity,
+) -> str:
+    common = validate_common_config(config)
+    commit = require_nonblank(runner_git_commit, "runner_git_commit").casefold()
+    if len(commit) not in {40, 64} or any(character not in "0123456789abcdef" for character in commit):
+        raise MeasurementError("runner_git_commit must be a full hexadecimal Git revision")
+    if not isinstance(runtime_identity, VerifiedRuntimeIdentity):
+        raise MeasurementError("a verified runtime identity preflight is required")
+    if runtime_identity.thesis_ready and not runtime_identity.revision_matches_runner:
+        raise MeasurementError("thesis-ready runtime identity must match the runner Git revision")
+    if runtime_identity.deployment_label != common["deployment_label"]:
+        raise MeasurementError("verified runtime identity deployment label does not match configuration")
+    observed_models = dict(runtime_identity.observed_models)
+    if observed_models != common["expected_models"]:
+        raise MeasurementError("verified runtime model identity does not match configured expectations")
+    if runtime_identity.revision_matches_runner != (runtime_identity.deployment_git_revision == commit):
+        raise MeasurementError("verified deployment revision comparison is inconsistent")
+    return commit

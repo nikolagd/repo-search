@@ -18,10 +18,19 @@ def _report():
         "metadata": {
             "measurement_type": "search_latency",
             "deployment_label": "compose",
-            "git_commit": "abc",
+            "runner_git_commit": "a" * 40,
+            "verified_deployment_identity": {
+                "deployment_git_revision": "a" * 40,
+                "runtime_kind": "microservices",
+                "thesis_ready": True,
+            },
+            "observed_runtime_model_identity": {
+                "verified_at_utc": "2026-01-01T00:00:00Z",
+            },
             "started_at_utc": "2026-01-01T00:00:00Z",
             "finished_at_utc": "2026-01-01T00:01:00Z",
             "percentile_convention": "nearest-rank",
+            "cold_evidence_max_age_seconds": 120.0,
         },
         "summary": {
             "attempted_sample_count": 1,

@@ -56,6 +56,7 @@ def _search_markdown(report: dict[str, Any]) -> list[str]:
         "## Search latency",
         "",
         "Warm-up samples are preserved in the raw artifact but excluded from every measured statistic.",
+        f"Cold evidence maximum age: {report['metadata']['cold_evidence_max_age_seconds']} seconds.",
         "",
         "| Attempted | Successful | Failed | Mean ms | Median ms | Min ms | Max ms | p50 ms | p95 ms |",
         "|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -93,13 +94,14 @@ def _resource_markdown(report: dict[str, Any]) -> list[str]:
         "",
         "Unavailable metrics are represented by null summary values; absence is never converted to zero.",
         "",
-        "| Name | Type | Availability | Samples | Unit | Mean | Min | Max | p95 | Reason |",
-        "|---|---|---|---:|---|---:|---:|---:|---:|---|",
+        "| Name | Type | Availability | Series | Labels | Samples | Unit | Mean | Min | Max | p95 | Reason |",
+        "|---|---|---|---:|---|---:|---|---:|---:|---:|---:|---|",
     ]
     for row in report["metric_summaries"]:
         lines.append(
-            f"| {row['name']} | {row['metric_type']} | {row['availability']} | {row['sample_count']} | "
-            f"{row['unit']} | {_format_metric(row['mean'])} | {_format_metric(row['minimum'])} | "
+            f"| {row['name']} | {row['metric_type']} | {row['availability']} | {_format_metric(row['series_count'])} | "
+            f"{json.dumps(row['accepted_labels'], sort_keys=True) if row['accepted_labels'] is not None else 'unavailable'} | "
+            f"{row['sample_count']} | {row['unit']} | {_format_metric(row['mean'])} | {_format_metric(row['minimum'])} | "
             f"{_format_metric(row['maximum'])} | {_format_metric(row['p95'])} | {row['unavailable_reason'] or ''} |"
         )
     return lines
@@ -127,12 +129,18 @@ def _backfill_markdown(report: dict[str, Any]) -> list[str]:
 
 def _render_markdown(report: dict[str, Any]) -> str:
     metadata = report["metadata"]
+    deployment = metadata["verified_deployment_identity"]
+    observed_models = metadata["observed_runtime_model_identity"]
     lines = [
         "# Runtime Performance Measurement",
         "",
         f"- Measurement type: `{metadata['measurement_type']}`",
         f"- Deployment: `{metadata['deployment_label']}`",
-        f"- Git commit: `{metadata['git_commit']}`",
+        f"- Runner Git commit: `{metadata['runner_git_commit']}`",
+        f"- Verified deployment Git revision: `{deployment['deployment_git_revision']}`",
+        f"- Runtime kind: `{deployment['runtime_kind']}`",
+        f"- Thesis-ready identity: `{deployment['thesis_ready']}`",
+        f"- Runtime identity verified UTC: `{observed_models['verified_at_utc']}`",
         f"- Started UTC: `{metadata['started_at_utc']}`",
         f"- Finished UTC: `{metadata['finished_at_utc']}`",
         f"- Percentiles: `{metadata['percentile_convention']}`",

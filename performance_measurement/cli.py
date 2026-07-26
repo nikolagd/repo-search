@@ -9,10 +9,11 @@ from performance_measurement.backfill import run_backfill_measurement
 from performance_measurement.common import MeasurementError, load_json_object, sha256_file
 from performance_measurement.prometheus import collect_resources
 from performance_measurement.reporting import write_report
+from performance_measurement.runtime_identity import verify_runtime_identity
 from performance_measurement.search_latency import load_queries, run_search_measurement
 
 
-def _git_commit() -> str:
+def _runner_git_commit() -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"],
         check=True,
@@ -43,14 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--config", required=True)
     search.add_argument("--queries", required=True)
     search.add_argument("--cold-evidence")
+    search.add_argument("--deployment-evidence", required=True)
     search.add_argument("--output-dir", required=True)
     search.add_argument("--overwrite", action="store_true")
     resources = commands.add_parser("resources", help="collect configured Prometheus metrics")
     resources.add_argument("--config", required=True)
+    resources.add_argument("--deployment-evidence", required=True)
     resources.add_argument("--output-dir", required=True)
     resources.add_argument("--overwrite", action="store_true")
     backfill = commands.add_parser("backfill", help="create and poll an embedding-backfill job")
     backfill.add_argument("--config", required=True)
+    backfill.add_argument("--deployment-evidence", required=True)
     backfill.add_argument("--output-dir", required=True)
     backfill.add_argument("--overwrite", action="store_true")
     return parser
@@ -61,7 +65,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_json_object(args.config, "measurement config")
         config_hash = sha256_file(args.config)
-        git_commit = _git_commit()
+        runner_git_commit = _runner_git_commit()
+        deployment_evidence = load_json_object(args.deployment_evidence, "deployment evidence")
+        runtime_section = config.get("runtime_identity")
+        runtime_kind = runtime_section.get("runtime_kind") if isinstance(runtime_section, dict) else None
+        runtime_token = _token_from_env(
+            config,
+            "runtime_identity",
+            required=runtime_kind == "microservices",
+        )
+        runtime_identity = verify_runtime_identity(
+            config,
+            deployment_evidence,
+            runner_git_commit=runner_git_commit,
+            deployment_evidence_sha256=sha256_file(args.deployment_evidence),
+            api_token=runtime_token,
+        )
         token = None
         if args.command == "search":
             token = _token_from_env(config, "search", required=True)
@@ -70,7 +89,8 @@ def main(argv: list[str] | None = None) -> int:
                 config,
                 load_queries(args.queries),
                 api_token=token or "",
-                git_commit=git_commit,
+                runner_git_commit=runner_git_commit,
+                runtime_identity=runtime_identity,
                 config_sha256=config_hash,
                 query_sha256=sha256_file(args.queries),
                 cold_evidence=evidence,
@@ -81,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             report = collect_resources(
                 config,
                 api_token=token,
-                git_commit=git_commit,
+                runner_git_commit=runner_git_commit,
+                runtime_identity=runtime_identity,
                 config_sha256=config_hash,
             )
         else:
@@ -89,10 +110,12 @@ def main(argv: list[str] | None = None) -> int:
             report = run_backfill_measurement(
                 config,
                 api_token=token or "",
-                git_commit=git_commit,
+                runner_git_commit=runner_git_commit,
+                runtime_identity=runtime_identity,
                 config_sha256=config_hash,
             )
-        write_report(args.output_dir, report, overwrite=args.overwrite, secrets=[token] if token else [])
+        secrets = [value for value in {token, runtime_token} if value]
+        write_report(args.output_dir, report, overwrite=args.overwrite, secrets=secrets)
     except MeasurementError as exc:
         raise SystemExit(str(exc)) from None
     print(Path(args.output_dir))

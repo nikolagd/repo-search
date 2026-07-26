@@ -10,6 +10,7 @@ import httpx
 
 from performance_measurement.common import (
     MeasurementError,
+    VerifiedRuntimeIdentity,
     build_metadata,
     format_utc,
     require_nonblank,
@@ -17,6 +18,7 @@ from performance_measurement.common import (
     utc_now,
     validate_common_config,
     validate_url,
+    validate_verified_runtime_identity,
 )
 
 
@@ -127,7 +129,8 @@ def run_backfill_measurement(
     config: dict[str, Any],
     *,
     api_token: str,
-    git_commit: str,
+    runner_git_commit: str,
+    runtime_identity: VerifiedRuntimeIdentity,
     config_sha256: str,
     client: httpx.Client | None = None,
     clock: Callable[[], datetime] = utc_now,
@@ -135,6 +138,7 @@ def run_backfill_measurement(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     validated = _validate_config(config)
+    validate_verified_runtime_identity(config, runner_git_commit, runtime_identity)
     token = require_nonblank(api_token, "API token environment variable")
     headers = {"X-API-Key": token}
     started_at = clock()
@@ -199,7 +203,8 @@ def run_backfill_measurement(
         "metadata": build_metadata(
             config,
             measurement_type="embedding_backfill",
-            git_commit=git_commit,
+            runner_git_commit=runner_git_commit,
+            runtime_identity=runtime_identity,
             started_at=started_at,
             finished_at=finished_at,
             input_sha256={"config": config_sha256},
