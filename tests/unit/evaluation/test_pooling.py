@@ -4,7 +4,7 @@ from evaluation.pooling import build_candidate_pool
 
 def test_candidate_pool_deduplicates_randomizes_and_blinds_methods() -> None:
     runs = [
-        QueryRun("q1", "keyword", [RetrievedItem("1", 3, "One"), RetrievedItem("2", 2, "Two")]),
+        QueryRun("q1", "bm25", [RetrievedItem("1", 3, "One"), RetrievedItem("2", 2, "Two")]),
         QueryRun("q1", "vector_only", [RetrievedItem("2", 0.9, "Two"), RetrievedItem("3", 0.8, "Three")]),
         QueryRun("q1", "full_pipeline", [RetrievedItem("1", 1.1, "One")], parser_mode="llm"),
     ]

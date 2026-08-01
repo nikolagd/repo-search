@@ -12,7 +12,7 @@ def _write(path, value) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def _pool_inputs(tmp_path, *, methods=("keyword", "vector_only", "full_pipeline")):
+def _pool_inputs(tmp_path, *, methods=("bm25", "vector_only", "full_pipeline")):
     queries = tmp_path / "pool-queries.json"
     runs = tmp_path / "pool-runs.json"
     _write(queries, {"queries": [{"query_id": "q1", "text": "synthetic query"}]})
@@ -26,7 +26,7 @@ def _pool_inputs(tmp_path, *, methods=("keyword", "vector_only", "full_pipeline"
                     "latency_ms": 1.0,
                     "parser_mode": "fallback" if method == "full_pipeline" else None,
                     "results": []
-                    if method != "keyword"
+                    if method != "bm25"
                     else [{"rank": 1, "publication_id": "d1", "score": 1.0}],
                 }
                 for method in methods
@@ -65,7 +65,7 @@ def test_candidate_pool_and_report_commands_write_machine_readable_outputs(tmp_p
             "runs": [
                 {
                     "query_id": "q1",
-                    "method": "keyword",
+                    "method": "bm25",
                     "latency_ms": 1.0,
                     "parser_mode": None,
                     "results": [
@@ -262,7 +262,7 @@ def test_candidate_pool_accepts_complete_matrix_including_empty_runs(tmp_path) -
 
 
 def test_candidate_pool_missing_matrix_entry_fails_before_writing(tmp_path) -> None:
-    queries, runs = _pool_inputs(tmp_path, methods=("keyword", "vector_only"))
+    queries, runs = _pool_inputs(tmp_path, methods=("bm25", "vector_only"))
     output = tmp_path / "must-not-exist.csv"
 
     with pytest.raises(ValueError, match="incomplete comparison matrix"):

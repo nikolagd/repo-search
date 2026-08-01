@@ -5,12 +5,15 @@
 ## Method Boundaries
 
 - `keyword` uses `KeywordBaselineAdapter` over the publication metadata loaded from the frozen database. Its existing NFKC/case-fold/token-frequency scoring and score-then-string-ID ordering are unchanged. It is an internal baseline, not a reproduction of DSpace, Google Scholar, PostgreSQL full-text ranking, or another search engine.
+- `bm25` is the final lexical comparator. It uses pinned `bm25s==0.3.10`, its `lucene` scoring variant, `k1=1.2`, `b=0.75`, separate title and abstract indexes, and the documented field combination `2.0 * title BM25 + abstract BM25`. Tokenization is Unicode NFKC plus case-folding and Unicode word tokens, without stemming or stop-word removal. Equal scores end with ascending string `publication_id`.
 - `vector_only` sends the original query directly to Embedding Service `/embed/query`, never calls Query Service, and executes the shared production pgvector retrieval helper without years, phrases, boosts, candidate merging, or coverage logic. Evaluation adds `publication.id ASC` only as a deterministic equal-distance tie-breaker; production search keeps its existing tie behavior.
 - `full_pipeline` sends the exact query to Gateway `/api/search`. Gateway/Search/Query/Embedding services own parsing and ranking. The collector preserves returned order, scores, and `plan.parser_mode` and does not reimplement ranking.
 
 Every method result must reference a publication loaded from the verified frozen transaction. For `full_pipeline`, the returned title and source URL must also equal the frozen values, including valid `null` values. This prevents a Gateway connected to another database from silently contributing results.
 
-Keyword and vector-only share one PostgreSQL `REPEATABLE READ`, `READ ONLY` transaction. Full pipeline uses service-owned transactions; therefore stopped corpus writers plus pre/post corpus verification are the cross-boundary consistency safeguard.
+Keyword, BM25, and vector-only share one PostgreSQL `REPEATABLE READ`, `READ ONLY` transaction. Full pipeline uses service-owned transactions; therefore stopped corpus writers plus pre/post corpus verification are the cross-boundary consistency safeguard.
+
+BM25 is a reproducible Solr/Lucene-style lexical baseline over the frozen local corpus. It is not claimed to reproduce Google Scholar, and it is not claimed to be byte-for-byte identical to either source repository's DSpace/Solr configuration. Live RFOS/REPFF search is not used as the primary comparator because its indexes and configuration can change and raw scores cannot be merged across repositories.
 
 ## Required Runtime Configuration
 
@@ -47,7 +50,7 @@ Run the collector only after those read-path services are ready:
 docker compose --env-file .codex-tmp/evaluation/repo-search-eval.env --project-name repo-search-eval -f docker-compose.microservices.yml -f .codex-tmp/evaluation/docker-compose.eval.override.yml -f evaluation/docker-compose.collect-runs.yml run --rm --no-deps evaluation-runner collect-runs `
   --queries /evaluation-input/queries.json `
   --output /evaluation-output/runs.json `
-  --methods keyword vector_only full_pipeline `
+  --methods bm25 vector_only full_pipeline `
   --limit 20 `
   --database-url-env EVALUATION_DATABASE_URL `
   --api-token-env EVALUATION_API_TOKEN `
@@ -72,7 +75,7 @@ docker compose --env-file .codex-tmp/evaluation/repo-search-eval.env --project-n
 ## Validation And Failure Behavior
 
 - Queries must have unique, nonblank string IDs and nonblank string text. Text is read/written as UTF-8 without transliteration or ASCII conversion.
-- Methods must be unique members of `keyword`, `vector_only`, and `full_pipeline`.
+- Methods must be unique members of `keyword`, `bm25`, `vector_only`, and `full_pipeline`. The default final set is `bm25`, `vector_only`, and `full_pipeline`; `keyword` must be requested explicitly for historical work.
 - Limit is 1–50, matching the application Search API.
 - Before retrieval, the collector verifies corpus size, canonical snapshot hash, current provenance for every embedding, Embedding Service model, and vector dimension.
 - Every selected query/method pair produces exactly one run, including explicit empty results.

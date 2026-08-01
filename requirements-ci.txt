@@ -2,6 +2,7 @@
 -r requirements-dev.txt
 
 fastapi==0.136.1
+bm25s==0.3.10
 httpx==0.28.1
 prometheus-client==0.22.1
 psycopg2-binary==2.9.11

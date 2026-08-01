@@ -75,7 +75,7 @@ Choose and document a controlled spelling/case vocabulary for grouping values. F
   --k 5 10 `
   --embedding-model intfloat/multilingual-e5-large `
   --ranking-config path\to\ranking-config.json `
-  --methods keyword vector_only full_pipeline
+  --methods bm25 vector_only full_pipeline
 ```
 
 `--ranking-config` also accepts an inline JSON object. The current Git commit and a UTC timestamp are recorded automatically. Use `--overwrite` only to replace a previously generated report directory.
