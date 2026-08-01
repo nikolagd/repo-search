@@ -43,7 +43,7 @@ def _metric_names(k_values: list[int]) -> list[str]:
         *[
             name
             for k in sorted(set(k_values))
-            for name in (f"precision@{k}", f"recall@{k}", f"ndcg@{k}")
+            for name in (f"mrr@{k}", f"precision@{k}", f"recall@{k}", f"ndcg@{k}")
         ],
     ]
 

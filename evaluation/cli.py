@@ -21,7 +21,13 @@ from evaluation.io import (
 )
 from evaluation.judgment_import import POOL_COLUMNS
 from evaluation.judgment_import import import_judgments
-from evaluation.collector import CollectorError, EvaluationServiceClient, run_collection, validate_methods
+from evaluation.collector import (
+    FINAL_METHODS,
+    CollectorError,
+    EvaluationServiceClient,
+    run_collection,
+    validate_methods,
+)
 from evaluation.pooling import build_candidate_pool
 from evaluation.reporting import build_report, write_report
 from microservices.common.embedding_provenance import (
@@ -82,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     pool.add_argument("--output", required=True)
     pool.add_argument("--depth", type=int, default=10)
     pool.add_argument("--seed", type=int, default=2026)
-    pool.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
+    pool.add_argument("--methods", nargs="+", default=list(FINAL_METHODS))
 
     report = commands.add_parser("report", help="calculate metrics and write JSON, CSV, and Markdown")
     report.add_argument("--queries", required=True)
@@ -95,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--embedding-model", required=True)
     report.add_argument("--embedding-model-revision")
     report.add_argument("--embedding-template-version")
-    report.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
+    report.add_argument("--methods", nargs="+", default=list(FINAL_METHODS))
     report.add_argument("--ranking-config", default="{}", help="JSON object or path to a JSON file")
     report.add_argument("--git-commit")
     report.add_argument("--overwrite", action="store_true")
@@ -115,10 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
     agreement.add_argument("--output-dir", required=True)
     agreement.add_argument("--overwrite", action="store_true")
 
-    collect = commands.add_parser("collect-runs", help="collect keyword, vector-only, and full-pipeline runs")
+    collect = commands.add_parser("collect-runs", help="collect BM25, vector-only, and full-pipeline runs")
     collect.add_argument("--queries", required=True)
     collect.add_argument("--output", required=True)
-    collect.add_argument("--methods", nargs="+", default=["keyword", "vector_only", "full_pipeline"])
+    collect.add_argument("--methods", nargs="+", default=list(FINAL_METHODS))
     collect.add_argument("--limit", type=int, default=20)
     collect.add_argument("--database-url-env", default="EVALUATION_DATABASE_URL")
     collect.add_argument("--api-token-env", default="EVALUATION_API_TOKEN")

@@ -4,11 +4,14 @@ This package compares three retrieval methods without supplying evaluation topic
 
 Production run collection is documented in `COLLECT_RUNS.md` and available through `python -m evaluation collect-runs`.
 
+For a frozen local snapshot, `python -m evaluation.bm25_artifacts` builds a new isolated directory containing `bm25-runs.json`, the combined `runs.json` with `bm25`/`vector_only`/`full_pipeline`, a blinded `candidates.csv`, and `metadata.json`. The command requires expected SHA-256 values for the query set, corpus snapshot, and historical runs before it reuses the frozen vector and full-pipeline results. Metadata records the pinned implementation and version, BM25 parameters, tokenization, fields and title boost, corpus/query/run hashes, top-k, pool depth/seed, and UTC run time. Existing output directories are never overwritten.
+
 Post-assessment judgment import, detailed reporting, and optional assessor agreement are documented in `REPORTING.md`. Human relevance scoring remains mandatory; the code never creates or infers judgments.
 
 ## Methods
 
-- `keyword`: deterministic local baseline over the supplied publication corpus. Text is Unicode NFKC-normalized and case-folded, then split into Unicode word tokens. The score is `2 * title query-term frequency + abstract query-term frequency`, using unique query terms. Documents with score zero are omitted. Ties are resolved by ascending string publication ID. This is a simple internal comparator; it does not reproduce DSpace, Google Scholar, PostgreSQL full-text search, or another external engine.
+- `keyword`: legacy deterministic token-frequency baseline. Text is Unicode NFKC-normalized and case-folded, then split into Unicode word tokens. The score remains `2 * title query-term frequency + abstract query-term frequency` for backward compatibility with historical frozen artifacts. It is not part of the final evaluation method set.
+- `bm25`: final lexical comparator. `bm25s==0.3.10` supplies Lucene-style BM25 scoring with `k1=1.2` and `b=0.75`. Title and abstract are indexed as separate fields without stemming or stop-word removal; the transparent field score is `2.0 * title BM25 + abstract BM25`. Normalization uses Unicode NFKC and case-folding, and equal scores use ascending string `publication_id` as the final tie-breaker.
 - `vector_only`: embeds the original query once and invokes the existing vector-fetch boundary with no LLM parsing, phrase boosts, candidate merging, or query-coverage boost. Its embedder and fetcher are injected, which permits deterministic tests and use with the existing Search/Embedding service functions.
 - `full_pipeline`: consumes the application Search Service response, including final scores and `plan.parser_mode`. Tests inject a deterministic service callable, so Ollama is never contacted.
 
@@ -26,21 +29,24 @@ Schemas are in `schemas/`. Empty starting files are in `templates/`. Synthetic t
 
 Unjudged retrieved documents are treated as nonrelevant. A query with no positive judgments receives zero Recall, MRR, and nDCG; Precision is also zero unless a positively judged result exists. Such queries remain in macro averages and are counted explicitly as `queries_without_relevant_judgments`.
 
-Both candidate pooling and reporting expect exactly one run for every query and method. Default methods are `keyword`, `vector_only`, and `full_pipeline`; override them with `--methods`. Duplicate method arguments and missing, duplicate, or unknown query/method runs are rejected, so pooling and every aggregate use the identical query set, including zero-result runs. Duplicate query IDs, judgments, retrieved publication IDs, ranks, gapped/non-one-based ranks, unknown query references, non-finite scores, and negative/non-finite latency are also rejected.
+Both candidate pooling and reporting expect exactly one run for every query and method. Default final methods are `bm25`, `vector_only`, and `full_pipeline`; override them with `--methods`. The legacy `keyword` method remains an explicit supported override only for historical compatibility. Duplicate method arguments and missing, duplicate, or unknown query/method runs are rejected, so pooling and every aggregate use the identical query set, including zero-result runs. Duplicate query IDs, judgments, retrieved publication IDs, ranks, gapped/non-one-based ranks, unknown query references, non-finite scores, and negative/non-finite latency are also rejected.
 
 ## Metrics
 
 - Precision@k: positively judged retrieved documents in the first k positions divided by k.
 - Recall@k: positively judged retrieved documents in the first k positions divided by all positively judged documents for the query.
 - MRR: reciprocal rank of the first positively judged result over the complete supplied run.
+- MRR@k: reciprocal rank of the first positively judged result only within the first k positions.
 - nDCG@k: DCG with gain `2^relevance - 1` and logarithmic discount, divided by the ideal ordering of available graded judgments.
+
+The final BM25 comparison protocol is defined in `FINAL_BM25_PROTOCOL.md`. Generic reporting remains reusable and therefore still emits Recall and unbounded MRR, but those fields are not supported claims for that depth-5 protocol.
 
 ## Commands
 
 Create a deterministic, method-blind assessment pool. The output intentionally contains no method names or method membership:
 
 ```powershell
-.\.venv\Scripts\python.exe -m evaluation candidate-pool --queries path\to\queries.json --runs path\to\runs.json --output path\to\candidates.csv --depth 10 --seed 2026 --methods keyword vector_only full_pipeline
+.\.venv\Scripts\python.exe -m evaluation candidate-pool --queries path\to\queries.json --runs path\to\runs.json --output path\to\candidates.csv --depth 10 --seed 2026 --methods bm25 vector_only full_pipeline
 ```
 
 After manual judgments have been completed, export the assessment sheet as UTF-8 CSV and validate/import it:
@@ -52,7 +58,7 @@ After manual judgments have been completed, export the assessment sheet as UTF-8
 Then calculate the detailed report:
 
 ```powershell
-.\.venv\Scripts\python.exe -m evaluation report --queries path\to\queries.json --query-metadata path\to\query-metadata.json --judgments path\to\judgments.json --runs path\to\runs.json --output-dir path\to\report --corpus-size 1000 --k 5 10 --embedding-model intfloat/multilingual-e5-large --ranking-config '{"candidate_multiplier":6}' --methods keyword vector_only full_pipeline
+.\.venv\Scripts\python.exe -m evaluation report --queries path\to\queries.json --query-metadata path\to\query-metadata.json --judgments path\to\judgments.json --runs path\to\runs.json --output-dir path\to\report --corpus-size 1000 --k 5 10 --embedding-model intfloat/multilingual-e5-large --ranking-config '{"candidate_multiplier":6}' --methods bm25 vector_only full_pipeline
 ```
 
 Optional second-assessor agreement:

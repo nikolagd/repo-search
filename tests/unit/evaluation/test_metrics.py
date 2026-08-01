@@ -22,6 +22,15 @@ def test_metrics_support_binary_and_graded_relevance() -> None:
     assert ndcg_at_k(results, judgments, 3) == pytest.approx(expected_dcg / expected_ideal)
 
 
+def test_reciprocal_rank_can_be_bounded_by_the_evaluated_cutoff() -> None:
+    results = [_result(f"d{rank}") for rank in range(1, 7)]
+    judgments = [Judgment("q1", "d6", 1)]
+
+    assert reciprocal_rank(results, judgments) == pytest.approx(1 / 6)
+    assert reciprocal_rank(results, judgments, 5) == 0
+    assert evaluate_run(results, judgments, [5])["mrr@5"] == 0
+
+
 def test_empty_and_incomplete_judgments_have_explicit_zero_behavior() -> None:
     results = [_result("unjudged")]
     metrics = evaluate_run(results, [], [1, 5])
@@ -30,6 +39,7 @@ def test_empty_and_incomplete_judgments_have_explicit_zero_behavior() -> None:
     assert metrics["precision@1"] == 0
     assert metrics["recall@5"] == 0
     assert metrics["mrr"] == 0
+    assert metrics["mrr@5"] == 0
     assert metrics["ndcg@5"] == 0
 
     incomplete = [Judgment("q1", "other", 2)]
@@ -42,6 +52,8 @@ def test_invalid_k_and_relevance_are_rejected() -> None:
         Judgment("q1", "d1", 3)
     with pytest.raises(ValueError, match="positive"):
         precision_at_k([], [], 0)
+    with pytest.raises(ValueError, match="positive"):
+        reciprocal_rank([], [], 0)
 
 
 def test_metrics_reject_duplicate_inputs_and_valid_ndcg_is_bounded() -> None:

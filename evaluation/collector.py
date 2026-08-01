@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from evaluation.adapters import FullPipelineAdapter, KeywordBaselineAdapter, VectorOnlyAdapter
+from evaluation.adapters import BM25BaselineAdapter, FullPipelineAdapter, KeywordBaselineAdapter, VectorOnlyAdapter
 from evaluation.corpus_audit import build_snapshot
 from evaluation.io import load_runs, validate_comparison_matrix, write_json
 from evaluation.models import EvaluationQuery, QueryRun
@@ -24,7 +24,8 @@ from microservices.common.embedding_provenance import (
 from microservices.search_service.vector_search import execute_vector_search
 
 
-SUPPORTED_METHODS = ("keyword", "vector_only", "full_pipeline")
+SUPPORTED_METHODS = ("keyword", "bm25", "vector_only", "full_pipeline")
+FINAL_METHODS = ("bm25", "vector_only", "full_pipeline")
 
 
 class CollectorError(RuntimeError):
@@ -366,11 +367,18 @@ async def collect_runs(
     frozen_publications = {str(publication["id"]): publication for publication in corpus_store.publications}
     if len(frozen_publications) != len(corpus_store.publications):
         raise CollectorError("frozen corpus contains duplicate publication IDs")
-    adapters = {
-        "keyword": KeywordBaselineAdapter(corpus_store.publications),
-        "vector_only": VectorOnlyAdapter(service_client.embed_query, corpus_store.fetch_vector_results),
-        "full_pipeline": FullPipelineAdapter(service_client.full_pipeline_search),
-    }
+    adapters = {}
+    if "keyword" in selected_methods:
+        adapters["keyword"] = KeywordBaselineAdapter(corpus_store.publications)
+    if "bm25" in selected_methods:
+        adapters["bm25"] = BM25BaselineAdapter(corpus_store.publications)
+    if "vector_only" in selected_methods:
+        adapters["vector_only"] = VectorOnlyAdapter(
+            service_client.embed_query,
+            corpus_store.fetch_vector_results,
+        )
+    if "full_pipeline" in selected_methods:
+        adapters["full_pipeline"] = FullPipelineAdapter(service_client.full_pipeline_search)
     runs = []
     for query in queries:
         for method in selected_methods:

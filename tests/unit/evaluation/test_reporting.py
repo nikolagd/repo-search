@@ -80,7 +80,7 @@ def test_per_query_metrics_reuse_existing_formulas_and_include_metadata() -> Non
         [Judgment("q1", "d1", 2), Judgment("q1", "d2", 0)],
         [1, 5],
     )
-    for name in ("mrr", "precision@1", "recall@5", "ndcg@5"):
+    for name in ("mrr", "mrr@5", "precision@1", "recall@5", "ndcg@5"):
         assert row[name] == expected[name]
     assert row["language"] == "sr"
     assert row["script"] == "latin"
