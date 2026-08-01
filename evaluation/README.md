@@ -36,7 +36,10 @@ Both candidate pooling and reporting expect exactly one run for every query and 
 - Precision@k: positively judged retrieved documents in the first k positions divided by k.
 - Recall@k: positively judged retrieved documents in the first k positions divided by all positively judged documents for the query.
 - MRR: reciprocal rank of the first positively judged result over the complete supplied run.
+- MRR@k: reciprocal rank of the first positively judged result only within the first k positions.
 - nDCG@k: DCG with gain `2^relevance - 1` and logarithmic discount, divided by the ideal ordering of available graded judgments.
+
+The final BM25 comparison protocol is defined in `FINAL_BM25_PROTOCOL.md`. Generic reporting remains reusable and therefore still emits Recall and unbounded MRR, but those fields are not supported claims for that depth-5 protocol.
 
 ## Commands
 

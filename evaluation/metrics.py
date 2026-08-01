@@ -43,10 +43,17 @@ def recall_at_k(results: list[RetrievedItem], judgments: Iterable[Judgment], k: 
     return len(relevant & retrieved) / len(relevant)
 
 
-def reciprocal_rank(results: list[RetrievedItem], judgments: Iterable[Judgment]) -> float:
+def reciprocal_rank(
+    results: list[RetrievedItem],
+    judgments: Iterable[Judgment],
+    k: int | None = None,
+) -> float:
+    if k is not None and k <= 0:
+        raise ValueError("k must be positive")
     _validate_results(results)
     relevance = _relevance_map(judgments)
-    for rank, item in enumerate(results, start=1):
+    ranked_results = results if k is None else results[:k]
+    for rank, item in enumerate(ranked_results, start=1):
         if relevance.get(item.publication_id, 0) > 0:
             return 1.0 / rank
     return 0.0
@@ -79,6 +86,7 @@ def evaluate_run(
         "mrr": reciprocal_rank(results, judgments),
     }
     for k in sorted(set(k_values)):
+        metrics[f"mrr@{k}"] = reciprocal_rank(results, judgments, k)
         metrics[f"precision@{k}"] = precision_at_k(results, judgments, k)
         metrics[f"recall@{k}"] = recall_at_k(results, judgments, k)
         metrics[f"ndcg@{k}"] = ndcg_at_k(results, judgments, k)

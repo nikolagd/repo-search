@@ -113,6 +113,7 @@ The report reuses `evaluation.metrics`:
 - Precision@k: positive retrieved judgments in the first k divided by k;
 - Recall@k: positive retrieved judgments in the first k divided by all positive judgments for that query;
 - MRR: reciprocal rank of the first positively judged result over the complete run;
+- MRR@k: reciprocal rank of the first positively judged result within the first k positions;
 - nDCG@k: gain `2^relevance - 1`, logarithmic rank discount, normalized by the ideal available graded judgments.
 
 Grades 1 and 2 count as positive for Precision, Recall, and MRR. nDCG retains the 0/1/2 grading. Unjudged retrieved documents are treated as nonrelevant. A query without positive judgments remains in every macro average and receives zero Recall, MRR, and nDCG; its status is reported explicitly.
