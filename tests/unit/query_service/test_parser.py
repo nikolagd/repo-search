@@ -37,6 +37,8 @@ def test_fallback_parser_builds_deterministic_plan_without_external_services() -
     assert plan == {
         "embedding_queries": ["graph neural networks"],
         "semantic_query": "graph neural networks",
+        "author_names": [],
+        "search_mode": "semantic",
         "topic_phrases": [],
         "year_from": 2021,
         "year_to": None,
@@ -71,3 +73,40 @@ def test_fallback_parser_preserves_original_query_when_only_a_filler_remains() -
     assert plan["embedding_queries"] == ["Find papers about"]
     assert plan["semantic_query"] == "Find papers about"
     assert plan["used_fallback"] is True
+
+
+@pytest.mark.parametrize(
+    ("query", "authors", "embedding_queries", "search_mode"),
+    [
+        ("autor: Ime Prezime", ["Ime Prezime"], [], "author"),
+        ("radovi autora Ime Prezime", ["Ime Prezime"], [], "author"),
+        ("publikacije autora Ime Prezime", ["Ime Prezime"], [], "author"),
+        ("papers by Jane Doe", ["Jane Doe"], [], "author"),
+        (
+            "radovi autora Ime Prezime o digitalnoj transformaciji posle 2020",
+            ["Ime Prezime"],
+            ["digitalnoj transformaciji"],
+            "hybrid",
+        ),
+        ("papers by Jane Doe about graph retrieval", ["Jane Doe"], ["graph retrieval"], "hybrid"),
+    ],
+)
+def test_fallback_parser_extracts_only_explicit_author_forms(
+    query: str,
+    authors: list[str],
+    embedding_queries: list[str],
+    search_mode: str,
+) -> None:
+    plan = parse_query_fallback(query)
+
+    assert plan["author_names"] == authors
+    assert plan["embedding_queries"] == embedding_queries
+    assert plan["search_mode"] == search_mode
+    assert all(author.casefold() not in " ".join(embedding_queries).casefold() for author in authors)
+
+
+def test_fallback_parser_does_not_guess_capitalized_phrases_are_authors() -> None:
+    plan = parse_query_fallback("Digital Transformation in Higher Education")
+
+    assert plan["author_names"] == []
+    assert plan["embedding_queries"] == ["digital transformation in higher education"]

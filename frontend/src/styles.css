@@ -250,6 +250,51 @@ input:focus {
   background: #f1f5f9;
 }
 
+.author-filter {
+  display: grid;
+  gap: 8px;
+}
+
+.author-entry {
+  display: grid;
+  grid-template-columns: 1fr 42px;
+  gap: 8px;
+}
+
+.author-entry .icon-action {
+  min-height: 42px;
+  border: 1px solid #cdd5df;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f766e;
+}
+
+.author-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.author-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px 5px 10px;
+  border-radius: 999px;
+  background: #e6f4f1;
+  color: #115e59;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.author-chip button {
+  display: inline-flex;
+  padding: 1px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 90px;

@@ -2,6 +2,18 @@ Primarni način pokretanja aplikacije je GPU Kubernetes deployment preko lokalno
 
 Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](docs/docker-compose-microservices.md) i treba ga koristiti samo za lokalni smoke test, debugging van Kubernetes-a ili poređenje sa manifestima.
 
+## Režimi pretrage i filter autora
+
+Search API prihvata `query`, opciono polje `author_names` sa najviše 10 imena i `limit`. Zahtev mora imati neprazan tekst upita, najmanje jednog autora ili oba. Trusted kod, a ne LLM, izvodi jedan od tri režima:
+
+- `semantic`: tematski upit bez autora;
+- `author`: jedan ili više autora bez tematskog upita; Embedding Service se ne poziva;
+- `hybrid`: tematski embedding uz strukturisane filtere autora i godine.
+
+Imena autora se nikada ne dodaju u embedding publikacije niti se vektorizuju. Pretraga koristi postojeće relacije `author` i `publication_author`. Svi tokeni jednog filtera moraju pripadati istom zapisu autora, a više filtera ima AND semantiku: publikacija mora odgovarati svakom navedenom autoru. Poređenje je neosetljivo na velika slova, interpunkciju, redosled tokena (`Ime Prezime` odgovara `Prezime, Ime`) i srpske latinične dijakritike. Nije potrebna PostgreSQL `unaccent` ekstenzija niti nova denormalizovana kolona.
+
+Author-only rezultati su deterministički poređani po datumu opadajuće (`NULLS LAST`), zatim po naslovu i ID-u. Nemaju izmišljenu kosinusnu sličnost niti skor. Frontend nudi ponovljivi author chip filter; eksplicitne vrednosti imaju prvenstvo i bezbedno se spajaju sa autorima koje izdvoji parser. Fallback parser konzervativno prepoznaje samo eksplicitne oblike kao `autor: Ime Prezime`, `radovi autora Ime Prezime`, `publikacije autora Ime Prezime` i `papers by Name`. Srpsku padežnu fleksiju nije moguće pouzdano vratiti na kanonsko ime, pa je eksplicitni frontend filter autoritativna putanja za tačno ime.
+
 ## 1. Preduslovi
 
 Potrebno je:

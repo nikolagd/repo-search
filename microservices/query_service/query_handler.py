@@ -1,4 +1,6 @@
 from datetime import datetime
+import re
+import unicodedata
 
 from microservices.query_service.llm_parser import parse_query_llm, repair_query_plan
 from microservices.query_service.parser import extract_year_constraints, parse_query_fallback
@@ -21,6 +23,56 @@ def clean_string_list(value):
     return cleaned
 
 
+def _author_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(sorted(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)))
+
+
+def clean_author_names(value) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for name in clean_string_list(value):
+        tokens = re.findall(r"[^\W\d_]+(?:[.'’-][^\W\d_]+)*", name, flags=re.UNICODE)
+        comparable = re.sub(r"[,\s]+", " ", name).strip()
+        if not (1 <= len(tokens) <= 6) or len(name) > 200:
+            continue
+        if " ".join(tokens).casefold() != comparable.casefold():
+            continue
+        key = _author_key(name)
+        if key not in seen:
+            seen.add(key)
+            result.append(name)
+    return result[:10]
+
+
+def sanitize_topic_text(value: str, author_names: list[str]) -> str:
+    clean = unicodedata.normalize("NFKC", value)
+    for author_name in author_names:
+        tokens = re.findall(r"[^\W\d_]+", author_name, flags=re.UNICODE)
+        variants = [tokens, list(reversed(tokens))] if len(tokens) > 1 else [tokens]
+        for variant in variants:
+            pattern = r"[\s,.;:]+".join(re.escape(token) for token in variant)
+            clean = re.sub(pattern, " ", clean, flags=re.IGNORECASE)
+    clean = re.sub(
+        r"\b(?:radovi|publikacije)\s+autora\b|\bpapers\s+by\b|\bautor\s*:",
+        " ",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    clean = re.sub(r"\s+", " ", clean).strip(" ,;:-")
+    if author_names:
+        clean = re.sub(r"^(?:o|about|on)\s+", "", clean, flags=re.IGNORECASE)
+    return clean
+
+
+def derive_search_mode(embedding_queries: list[str], author_names: list[str]) -> str:
+    if author_names and not embedding_queries:
+        return "author"
+    if author_names:
+        return "hybrid"
+    return "semantic"
+
+
 def apply_explicit_year_constraints(plan: dict, original_query: str) -> dict:
     parsed_years = extract_year_constraints(original_query)
     if parsed_years["year_from"] is not None or parsed_years["year_to"] is not None:
@@ -38,9 +90,15 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
     if not isinstance(raw, dict):
         return None, "LLM response is not a JSON object."
 
-    embedding_queries = clean_string_list(raw.get("embedding_queries"))
-    if not embedding_queries:
-        return None, "embedding_queries must be a non-empty list."
+    author_names = clean_author_names(raw.get("author_names"))
+    embedding_queries = [
+        clean
+        for item in clean_string_list(raw.get("embedding_queries"))
+        if (clean := sanitize_topic_text(item, author_names))
+    ]
+    embedding_queries = clean_string_list(embedding_queries)
+    if not embedding_queries and not author_names:
+        return None, "embedding_queries may be empty only when author_names is non-empty."
 
     year_from = raw.get("year_from")
     year_to = raw.get("year_to")
@@ -58,15 +116,26 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
 
     interpreted_query = raw.get("interpreted_query")
     if not isinstance(interpreted_query, str) or not interpreted_query.strip():
-        interpreted_query = f"Searching for: {embedding_queries[0]}"
+        understood = embedding_queries[0] if embedding_queries else ", ".join(author_names)
+        interpreted_query = f"Searching for: {understood}"
 
     plan = {
         "embedding_queries": embedding_queries,
-        "semantic_query": embedding_queries[0],
-        "topic_phrases": clean_string_list(raw.get("topic_phrases")),
+        "semantic_query": embedding_queries[0] if embedding_queries else "",
+        "author_names": author_names,
+        "search_mode": derive_search_mode(embedding_queries, author_names),
+        "topic_phrases": [
+            clean
+            for item in clean_string_list(raw.get("topic_phrases"))
+            if (clean := sanitize_topic_text(item, author_names))
+        ],
         "year_from": year_from,
         "year_to": year_to,
-        "ranking_phrases": clean_string_list(raw.get("ranking_phrases")),
+        "ranking_phrases": [
+            clean
+            for item in clean_string_list(raw.get("ranking_phrases"))
+            if (clean := sanitize_topic_text(item, author_names))
+        ],
         "interpreted_query": interpreted_query.strip(),
         "used_fallback": False,
         "parser_mode": "llm",

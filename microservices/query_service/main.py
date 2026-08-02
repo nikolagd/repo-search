@@ -86,9 +86,13 @@ def parse(request: QueryParseRequest) -> dict:
                 parser_mode=parser_mode,
                 query_length=len(request.query),
                 embedding_query_count=len(plan.get("embedding_queries", [])),
+                search_mode=plan.get("search_mode", "semantic"),
+                author_filter_count=len(plan.get("author_names", [])),
             )
         if span is not None:
             span.set_attribute("repo_search.embedding_query_count", len(plan.get("embedding_queries", [])))
+            span.set_attribute("repo_search.search_mode", plan.get("search_mode", "semantic"))
+            span.set_attribute("repo_search.author_filter_count", len(plan.get("author_names", [])))
             span.set_attribute("repo_search.used_fallback", bool(plan.get("used_fallback")))
             span.set_attribute("repo_search.parser_mode", parser_mode)
         return plan

@@ -146,3 +146,98 @@ def test_fetch_vector_results_uses_pgvector_and_year_filters(
         year_to=2022,
     )
     assert publication_ids["inactive"] in {row[0] for row in reactivated_rows}
+
+
+def test_structured_author_search_uses_relational_filters_and_deterministic_order(
+    pgvector_connection_factory: Callable[[], Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from microservices.catalog_service import main as catalog_main
+    from microservices.search_service import main as search_main
+
+    monkeypatch.setattr(catalog_main, "get_connection", pgvector_connection_factory)
+    monkeypatch.setattr(search_main, "get_connection", pgvector_connection_factory)
+    catalog_main.ensure_schema()
+
+    connection = pgvector_connection_factory()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO repository (name, oai_endpoint) VALUES (%s, %s) RETURNING id",
+                ("Author repository", "https://authors.example.test/oai"),
+            )
+            repository_id = cursor.fetchone()[0]
+            author_ids: dict[str, int] = {}
+            for name in ("Prezime, Ime", "Drugi Autor", "Đorđe Šarić"):
+                cursor.execute("INSERT INTO author (full_name) VALUES (%s) RETURNING id", (name,))
+                author_ids[name] = cursor.fetchone()[0]
+
+            publications = [
+                ("reversed", "Alpha", datetime(2024, 1, 1), True, ["Prezime, Ime"], 1.0, 0.0),
+                ("accent", "Accent", datetime(2023, 1, 1), True, ["Đorđe Šarić"], 0.0, 1.0),
+                (
+                    "multiple",
+                    "Beta",
+                    datetime(2022, 1, 1),
+                    True,
+                    ["Prezime, Ime", "Drugi Autor"],
+                    0.9,
+                    0.1,
+                ),
+                ("null-date", "Gamma", None, True, ["Prezime, Ime"], 0.8, 0.2),
+                ("inactive", "Hidden", datetime(2025, 1, 1), False, ["Prezime, Ime"], 1.0, 0.0),
+            ]
+            publication_ids: dict[str, int] = {}
+            for key, title, published_at, active, authors, first, second in publications:
+                cursor.execute(
+                    """
+                    INSERT INTO publication (
+                        repository_id, title, abstract, source_url, date, oai_identifier, is_active, embedding
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)
+                    RETURNING id
+                    """,
+                    (
+                        repository_id,
+                        title,
+                        "Author search integration fixture",
+                        f"https://authors.example.test/{key}",
+                        published_at,
+                        f"oai:author:{key}",
+                        active,
+                        _vector_literal(first=first, second=second),
+                    ),
+                )
+                publication_id = cursor.fetchone()[0]
+                publication_ids[key] = publication_id
+                for author in authors:
+                    cursor.execute(
+                        "INSERT INTO publication_author (publication_id, author_id) VALUES (%s, %s)",
+                        (publication_id, author_ids[author]),
+                    )
+        connection.commit()
+    finally:
+        connection.close()
+
+    exact = search_main.fetch_author_results(10, None, None, ["Ime Prezime"])
+    assert [row[0] for row in exact] == [
+        publication_ids["reversed"], publication_ids["multiple"], publication_ids["null-date"]
+    ]
+    assert exact[0][6] == "Author repository"
+    assert exact[1][7] == ["Drugi Autor", "Prezime, Ime"]
+    assert all(row[5] is None for row in exact)
+
+    punctuation_case = search_main.fetch_author_results(10, None, None, ["PREZIME. IME"])
+    assert [row[0] for row in punctuation_case] == [row[0] for row in exact]
+    surname = search_main.fetch_author_results(10, None, None, ["Prezime"])
+    assert [row[0] for row in surname] == [row[0] for row in exact]
+    accent = search_main.fetch_author_results(10, None, None, ["Dorde Saric"])
+    assert [row[0] for row in accent] == [publication_ids["accent"]]
+    multiple = search_main.fetch_author_results(10, None, None, ["Ime Prezime", "Drugi Autor"])
+    assert [row[0] for row in multiple] == [publication_ids["multiple"]]
+    year_filtered = search_main.fetch_author_results(10, 2024, 2024, ["Ime Prezime"])
+    assert [row[0] for row in year_filtered] == [publication_ids["reversed"]]
+    assert publication_ids["inactive"] not in {row[0] for row in exact}
+
+    query_vector = [1.0, 0.0, *([0.0] * (VECTOR_DIMENSIONS - 2))]
+    hybrid = search_main.fetch_vector_results(query_vector, 10, None, None, ["Drugi Autor"])
+    assert [row[0] for row in hybrid] == [publication_ids["multiple"]]

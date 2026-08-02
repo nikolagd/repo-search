@@ -44,6 +44,8 @@ def test_parse_query_llm_returns_mocked_plan_without_http(
     assert len(prompts) == 1
     assert "graph neural networks after 2020" in prompts[0]
     assert "Return ONLY valid JSON" in prompts[0]
+    assert '"author_names": string[]' in prompts[0]
+    assert "never in embedding_queries" in prompts[0]
 
 
 def test_parse_query_llm_returns_none_and_records_failure_for_invalid_response(
@@ -94,6 +96,8 @@ def test_repair_query_plan_submits_reason_and_bad_plan_without_http(
     assert "AI after 2020" in prompts[0]
     assert "embedding_queries must be a non-empty list." in prompts[0]
     assert '"embedding_queries": []' in prompts[0]
+    assert '"author_names": string[]' in prompts[0]
+    assert "embedding_queries may be empty only when author_names is non-empty" in prompts[0]
 
 
 def test_repair_query_plan_returns_none_and_records_failure(
