@@ -441,7 +441,7 @@ def record_retrieval_search(
         return
 
     top_score = max(result_scores)
-    average_score = sum(result_scores) / result_count
+    average_score = sum(result_scores) / len(result_scores)
     RETRIEVAL_TOP_SCORE.labels(service_name).observe(top_score)
     RETRIEVAL_AVERAGE_SCORE.labels(service_name).observe(average_score)
     for score in result_scores:

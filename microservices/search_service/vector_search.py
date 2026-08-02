@@ -85,6 +85,35 @@ def execute_vector_search(
     *,
     deterministic_ties: bool = False,
 ) -> list[tuple[Any, ...]]:
+    ranked_order = "cosine_distance ASC, id ASC" if deterministic_ties else "cosine_distance ASC"
+    final_order = "ranked.cosine_distance ASC, ranked.id ASC" if deterministic_ties else "ranked.cosine_distance ASC"
+    if not author_names:
+        sql = """
+            WITH ranked AS (
+                SELECT id, repository_id, title, abstract, source_url, date,
+                       embedding <=> %s::vector AS cosine_distance
+                FROM publication
+                WHERE is_active = TRUE
+                  AND embedding IS NOT NULL
+        """
+        params: list[Any] = [query_vector]
+        if year_from is not None:
+            sql += " AND date >= %s"
+            params.append(f"{year_from}-01-01")
+        if year_to is not None:
+            sql += " AND date <= %s"
+            params.append(f"{year_to}-12-31")
+        sql += f"""
+                ORDER BY {ranked_order}
+                LIMIT %s
+            )
+        """
+        params.append(limit)
+        sql += _result_projection(final_order)
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+
     sql = """
         WITH filtered AS MATERIALIZED (
             SELECT p.id, p.repository_id, p.title, p.abstract, p.source_url, p.date, p.embedding
@@ -100,10 +129,8 @@ def execute_vector_search(
     if year_to is not None:
         sql += " AND p.date <= %s"
         params.append(f"{year_to}-12-31")
-    sql = _append_author_filters(sql, params, author_names or [], "p")
+    sql = _append_author_filters(sql, params, author_names, "p")
 
-    ranked_order = "cosine_distance ASC, id ASC" if deterministic_ties else "cosine_distance ASC"
-    final_order = "ranked.cosine_distance ASC, ranked.id ASC" if deterministic_ties else "ranked.cosine_distance ASC"
     sql += f"""
         ), ranked AS (
             SELECT id, repository_id, title, abstract, source_url, date,

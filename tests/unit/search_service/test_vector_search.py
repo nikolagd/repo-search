@@ -35,7 +35,19 @@ def test_production_vector_search_retains_existing_ordering() -> None:
     assert "ORDER BY cosine_distance ASC\n" in connection.last_cursor.sql
     assert "ORDER BY ranked.cosine_distance ASC\n" in connection.last_cursor.sql
     assert "cosine_distance ASC, id ASC" not in connection.last_cursor.sql
-    assert "WHERE p.is_active = TRUE" in connection.last_cursor.sql
+    assert "WHERE is_active = TRUE" in connection.last_cursor.sql
+    assert "MATERIALIZED" not in connection.last_cursor.sql
+    assert connection.last_cursor.params == [[1.0], 10]
+
+
+def test_semantic_year_filters_keep_direct_vector_query_shape() -> None:
+    connection = Connection()
+    execute_vector_search(connection, [1.0], 10, 2020, 2024)
+
+    assert "MATERIALIZED" not in connection.last_cursor.sql
+    assert "FROM publication\n" in connection.last_cursor.sql
+    assert "embedding <=> %s::vector" in connection.last_cursor.sql
+    assert connection.last_cursor.params == [[1.0], "2020-01-01", "2024-12-31", 10]
 
 
 def test_evaluation_vector_search_adds_deterministic_id_tie_breaker() -> None:
@@ -58,6 +70,7 @@ def test_author_filters_use_token_level_all_semantics() -> None:
 
     assert connection.last_cursor.sql.count("AND EXISTS") == 2
     assert connection.last_cursor.sql.count("bool_and") == 2
+    assert "WITH filtered AS MATERIALIZED" in connection.last_cursor.sql
     assert connection.last_cursor.params == [
         "2020-01-01",
         "2024-12-31",
