@@ -49,6 +49,8 @@ def test_normalize_plan_builds_canonical_query_service_response() -> None:
     assert plan == {
         "embedding_queries": ["primary topic", "secondary topic"],
         "semantic_query": "primary topic",
+        "author_names": [],
+        "search_mode": "semantic",
         "topic_phrases": ["main phrase"],
         "year_from": 2019,
         "year_to": None,
@@ -75,8 +77,8 @@ def test_normalize_plan_supplies_default_interpretation() -> None:
     [
         (None, "LLM response is not a JSON object."),
         ([], "LLM response is not a JSON object."),
-        ({"embedding_queries": []}, "embedding_queries must be a non-empty list."),
-        ({"embedding_queries": [42]}, "embedding_queries must be a non-empty list."),
+        ({"embedding_queries": []}, "embedding_queries may be empty only when author_names is non-empty."),
+        ({"embedding_queries": [42]}, "embedding_queries may be empty only when author_names is non-empty."),
         (
             {"embedding_queries": ["AI"], "year_from": "2020"},
             "year_from must be an integer or null.",
@@ -172,7 +174,7 @@ def test_parse_query_repairs_invalid_non_null_plan_once(
         (
             "information retrieval",
             bad_plan,
-            "embedding_queries must be a non-empty list.",
+            "embedding_queries may be empty only when author_names is non-empty.",
         )
     ]
     assert plan["parser_mode"] == "llm_repaired"
@@ -190,7 +192,39 @@ def test_parse_query_skips_repair_when_llm_returns_none(
     assert plan["parser_mode"] == "fallback"
     assert plan["used_fallback"] is True
     assert plan["semantic_query"] == "ai"
-    assert plan["year_from"] == 2021
+
+
+def test_normalize_plan_allows_author_only_and_derives_mode() -> None:
+    plan, reason = query_handler.normalize_plan(
+        {"embedding_queries": [], "author_names": ["  Ime Prezime  "]},
+        "radovi autora Ime Prezime",
+    )
+
+    assert reason is None
+    assert plan is not None
+    assert plan["embedding_queries"] == []
+    assert plan["semantic_query"] == ""
+    assert plan["author_names"] == ["Ime Prezime"]
+    assert plan["search_mode"] == "author"
+
+
+def test_normalize_plan_removes_authors_from_all_topical_fields() -> None:
+    plan, reason = query_handler.normalize_plan(
+        {
+            "embedding_queries": ["radovi autora Ime Prezime o digitalnoj transformaciji"],
+            "author_names": ["Ime Prezime"],
+            "topic_phrases": ["Ime Prezime", "digitalna transformacija"],
+            "ranking_phrases": ["Prezime, Ime", "visoko obrazovanje"],
+        },
+        "radovi autora Ime Prezime o digitalnoj transformaciji",
+    )
+
+    assert reason is None
+    assert plan is not None
+    assert plan["embedding_queries"] == ["digitalnoj transformaciji"]
+    assert plan["topic_phrases"] == ["digitalna transformacija"]
+    assert plan["ranking_phrases"] == ["visoko obrazovanje"]
+    assert plan["search_mode"] == "hybrid"
 
 
 def test_parse_query_falls_back_when_repaired_plan_is_still_invalid(

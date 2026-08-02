@@ -23,10 +23,53 @@ YEAR_PATTERNS = [
     (r"\b(?:until|do|to)\s+(\d{4})\b", "to", 0),
 ]
 
+AUTHOR_PATTERNS = [
+    re.compile(
+        r"^(?:radovi|publikacije)\s+autora\s+(.+?)(?:\s+(?:o|na\s+temu)\s+(.+))?$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^papers\s+by\s+(.+?)(?:\s+(?:about|on)\s+(.+))?$", re.IGNORECASE),
+]
+AUTHOR_TOKEN_PATTERN = re.compile(r"[^\W\d_]+(?:[.'’-][^\W\d_]+)*", re.UNICODE)
+
 
 def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _valid_author_name(value: str) -> str | None:
+    name = normalize_text(value.strip(" ,;:"))
+    tokens = AUTHOR_TOKEN_PATTERN.findall(name)
+    if not (1 <= len(tokens) <= 6) or " ".join(tokens).casefold() != re.sub(
+        r"[,\s]+", " ", name
+    ).strip().casefold():
+        return None
+    return name if len(name) <= 200 else None
+
+
+def extract_author_constraints(text: str) -> dict:
+    clean = normalize_text(text)
+    explicit = re.search(r"(?:^|\s)autor\s*:\s*(.+?)(?:\s*;\s*(.*)|$)", clean, re.IGNORECASE)
+    if explicit:
+        name = _valid_author_name(explicit.group(1))
+        if name:
+            before = clean[: explicit.start()].strip()
+            after = (explicit.group(2) or "").strip()
+            return {"clean_query": normalize_text(f"{before} {after}"), "author_names": [name]}
+
+    for pattern in AUTHOR_PATTERNS:
+        match = pattern.fullmatch(clean)
+        if not match:
+            continue
+        name = _valid_author_name(match.group(1))
+        if name:
+            return {
+                "clean_query": normalize_text(match.group(2) or ""),
+                "author_names": [name],
+            }
+
+    return {"clean_query": clean, "author_names": []}
 
 
 def remove_fillers(text: str) -> str:
@@ -83,23 +126,32 @@ def extract_year_constraints(query: str) -> dict:
 
 
 def parse_query_fallback(query: str) -> dict:
-    parsed_years = extract_year_constraints(query)
+    parsed_authors = extract_author_constraints(query)
+    parsed_years = extract_year_constraints(parsed_authors["clean_query"])
     soft_terms = extract_soft_terms(parsed_years["clean_query"])
     clean = remove_fillers(parsed_years["clean_query"])
 
     for term in soft_terms:
         clean = clean.replace(term.lower(), " ")
 
-    semantic_query = normalize_text(clean) or query.strip()
+    semantic_query = normalize_text(clean)
+    if not semantic_query and not parsed_authors["author_names"]:
+        semantic_query = query.strip()
+    embedding_queries = [semantic_query] if semantic_query else []
+    understood = semantic_query or ", ".join(parsed_authors["author_names"])
 
     return {
-        "embedding_queries": [semantic_query],
+        "embedding_queries": embedding_queries,
         "semantic_query": semantic_query,
+        "author_names": parsed_authors["author_names"],
+        "search_mode": "hybrid" if embedding_queries and parsed_authors["author_names"] else (
+            "author" if parsed_authors["author_names"] else "semantic"
+        ),
         "topic_phrases": [],
         "year_from": parsed_years["year_from"],
         "year_to": parsed_years["year_to"],
         "ranking_phrases": [],
-        "interpreted_query": f"LLM parsing was unavailable, so I searched using: {semantic_query}",
+        "interpreted_query": f"LLM parsing was unavailable, so I searched using: {understood}",
         "used_fallback": True,
         "parser_mode": "fallback",
     }

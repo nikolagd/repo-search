@@ -26,6 +26,7 @@ export default function ResultsPanel({ error, loading, searchPayload, yearLabel 
       {searchPayload?.plan && (
         <div className="query-plan">
           <span>{searchPayload.plan.interpreted_query}</span>
+          <strong>{searchPayload.search_mode}</strong>
           {searchPayload.plan.used_fallback && <strong>Fallback parser</strong>}
         </div>
       )}

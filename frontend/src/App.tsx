@@ -14,6 +14,7 @@ import type { HealthResponse, RepositoryResponse, SearchResponse, StatsResponse 
 export default function App() {
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
   const [limit, setLimit] = useState(10);
+  const [authorNames, setAuthorNames] = useState<string[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [repositories, setRepositories] = useState<RepositoryResponse[]>([]);
@@ -76,7 +77,7 @@ export default function App() {
     try {
       const payload = await fetchJson<SearchResponse>("/api/search", {
         method: "POST",
-        body: JSON.stringify({ query, limit }),
+        body: JSON.stringify({ query, author_names: authorNames, limit }),
       });
       setSearchPayload(payload);
     } catch (err) {
@@ -91,9 +92,11 @@ export default function App() {
     <section className="workspace">
       <SearchPanel
         examples={EXAMPLE_QUERIES}
+        authorNames={authorNames}
         limit={limit}
         loading={loading}
         onLimitChange={setLimit}
+        onAuthorNamesChange={setAuthorNames}
         onQueryChange={setQuery}
         onSubmit={submitSearch}
         query={query}

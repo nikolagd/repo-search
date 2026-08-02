@@ -29,6 +29,8 @@ export interface StatsResponse {
 export interface SearchPlan {
   embedding_queries: string[];
   semantic_query: string;
+  author_names: string[];
+  search_mode: "semantic" | "author" | "hybrid";
   topic_phrases: string[];
   year_from: number | null;
   year_to: number | null;
@@ -43,15 +45,15 @@ export interface SearchResult {
   abstract: string | null;
   source_url: string | null;
   date: string | null;
-  cosine_distance: number;
-  cosine_similarity: number;
+  cosine_distance: number | null;
+  cosine_similarity: number | null;
   topic_boost: number;
   ranking_boost: number;
   coverage_boost: number;
-  score: number;
+  score: number | null;
   repository: string | null;
   authors: string[];
-  matched_query: string;
+  matched_query: string | null;
   matched_queries: string[];
   best_rank: number;
 }
@@ -60,6 +62,7 @@ export interface SearchResponse {
   query: string;
   limit: number;
   plan: SearchPlan;
+  search_mode: "semantic" | "author" | "hybrid";
   results: SearchResult[];
   total: number;
 }

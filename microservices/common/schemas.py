@@ -1,9 +1,48 @@
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+MAX_AUTHOR_FILTERS = 10
+MAX_AUTHOR_NAME_LENGTH = 200
 
 
 class SearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=1000)
+    query: str = Field(default="", max_length=1000)
+    author_names: list[str] = Field(default_factory=list, max_length=MAX_AUTHOR_FILTERS)
     limit: int = Field(10, ge=1, le=50)
+
+    @field_validator("author_names", mode="before")
+    @classmethod
+    def normalize_author_names(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("author_names must be a list")
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("author names must be strings")
+            name = " ".join(item.split())
+            if not name:
+                raise ValueError("author names must not be blank")
+            if not re.search(r"[^\W\d_]", name, flags=re.UNICODE):
+                raise ValueError("author names must contain at least one letter")
+            if len(name) > MAX_AUTHOR_NAME_LENGTH:
+                raise ValueError(f"author names must not exceed {MAX_AUTHOR_NAME_LENGTH} characters")
+            key = name.casefold()
+            if key not in seen:
+                seen.add(key)
+                result.append(name)
+        return result
+
+    @model_validator(mode="after")
+    def require_query_or_author(self) -> "SearchRequest":
+        self.query = self.query.strip()
+        if not self.query and not self.author_names:
+            raise ValueError("a nonblank query or at least one author name is required")
+        return self
 
 
 class AdminCredentials(BaseModel):

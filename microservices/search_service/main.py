@@ -39,10 +39,17 @@ from microservices.common.observability import (
     set_retrieval_model_info,
     setup_observability,
 )
-from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse, SearchRequest
+from microservices.common.schemas import (
+    MAX_AUTHOR_FILTERS,
+    HealthResponse,
+    LivenessResponse,
+    ReadinessResponse,
+    SearchRequest,
+)
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
-from microservices.search_service.vector_search import execute_vector_search
+from microservices.query_service.query_handler import derive_search_mode, sanitize_topic_text
+from microservices.search_service.vector_search import execute_author_search, execute_vector_search, normalize_author_tokens
 
 QUERY_SERVICE_URL = service_url("QUERY_SERVICE_URL", "http://query-service:8000")
 EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-service:8000")
@@ -264,7 +271,57 @@ def phrase_boost(title: str | None, abstract: str | None, phrases: list[str], ti
     return boost
 
 
-def fetch_vector_results(query_vector: list[float], limit: int, year_from: int | None, year_to: int | None) -> list[tuple[Any, ...]]:
+def merge_author_names(explicit: list[str], extracted: list[str] | None) -> list[str]:
+    merged: list[str] = []
+    seen: set[tuple[str, ...]] = set()
+    for candidate in [*explicit, *(extracted or [])]:
+        if not isinstance(candidate, str):
+            continue
+        name = " ".join(candidate.split())
+        tokens = normalize_author_tokens(name)
+        if not name or len(name) > 200 or not (1 <= len(tokens) <= 6):
+            continue
+        key = tuple(sorted(tokens))
+        if key not in seen:
+            seen.add(key)
+            merged.append(name)
+        if len(merged) == MAX_AUTHOR_FILTERS:
+            break
+    return merged
+
+
+def finalize_search_plan(parsed: dict, explicit_authors: list[str]) -> dict:
+    plan = dict(parsed)
+    author_names = merge_author_names(explicit_authors, plan.get("author_names"))
+    embedding_queries = []
+    for item in plan.get("embedding_queries") or []:
+        if isinstance(item, str) and (clean := sanitize_topic_text(item, author_names)):
+            if clean not in embedding_queries:
+                embedding_queries.append(clean)
+    plan["embedding_queries"] = embedding_queries
+    plan["semantic_query"] = embedding_queries[0] if embedding_queries else ""
+    plan["author_names"] = author_names
+    plan["topic_phrases"] = [
+        clean
+        for item in plan.get("topic_phrases") or []
+        if isinstance(item, str) and (clean := sanitize_topic_text(item, author_names))
+    ]
+    plan["ranking_phrases"] = [
+        clean
+        for item in plan.get("ranking_phrases") or []
+        if isinstance(item, str) and (clean := sanitize_topic_text(item, author_names))
+    ]
+    plan["search_mode"] = derive_search_mode(embedding_queries, author_names)
+    return plan
+
+
+def fetch_vector_results(
+    query_vector: list[float],
+    limit: int,
+    year_from: int | None,
+    year_to: int | None,
+    author_names: list[str] | None = None,
+) -> list[tuple[Any, ...]]:
     with observe_retrieval_stage(
         "search-service",
         "vector_retrieval",
@@ -272,11 +329,38 @@ def fetch_vector_results(query_vector: list[float], limit: int, year_from: int |
             "repo_search.candidate_limit": limit,
             "repo_search.year_from": year_from,
             "repo_search.year_to": year_to,
+            "repo_search.author_filter_count": len(author_names or []),
         },
     ) as span:
         conn = get_connection()
         try:
-            rows = execute_vector_search(conn, query_vector, limit, year_from, year_to)
+            rows = execute_vector_search(conn, query_vector, limit, year_from, year_to, author_names)
+            if span is not None:
+                span.set_attribute("repo_search.result_candidates", len(rows))
+            return rows
+        finally:
+            conn.close()
+
+
+def fetch_author_results(
+    limit: int,
+    year_from: int | None,
+    year_to: int | None,
+    author_names: list[str],
+) -> list[tuple[Any, ...]]:
+    with observe_retrieval_stage(
+        "search-service",
+        "author_retrieval",
+        {
+            "repo_search.candidate_limit": limit,
+            "repo_search.year_from": year_from,
+            "repo_search.year_to": year_to,
+            "repo_search.author_filter_count": len(author_names),
+        },
+    ) as span:
+        conn = get_connection()
+        try:
+            rows = execute_author_search(conn, limit, year_from, year_to, author_names)
             if span is not None:
                 span.set_attribute("repo_search.result_candidates", len(rows))
             return rows
@@ -389,29 +473,93 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                 span.set_attribute("repo_search.query_length", len(query))
                 span.set_attribute("repo_search.limit", request.limit)
 
-            with observe_retrieval_stage("search-service", "query_parse") as parse_span:
-                parsed = await parse_search_query(query)
-                parser_mode = normalize_parser_mode(parsed.get("parser_mode"), bool(parsed.get("used_fallback")))
+            if query:
+                with observe_retrieval_stage("search-service", "query_parse") as parse_span:
+                    parsed = await parse_search_query(query)
+                    parser_mode = normalize_parser_mode(
+                        parsed.get("parser_mode"), bool(parsed.get("used_fallback"))
+                    )
+                    record_retrieval_parser_event("search-service", parser_mode)
+                    if parse_span is not None:
+                        parse_span.set_attribute("repo_search.parser_mode", parser_mode)
+            else:
+                parser_mode = "explicit"
+                parsed = {
+                    "embedding_queries": [],
+                    "author_names": [],
+                    "topic_phrases": [],
+                    "ranking_phrases": [],
+                    "year_from": None,
+                    "year_to": None,
+                    "interpreted_query": f"Author filters: {', '.join(request.author_names)}",
+                    "used_fallback": False,
+                    "parser_mode": parser_mode,
+                }
                 record_retrieval_parser_event("search-service", parser_mode)
-                if parse_span is not None:
-                    parse_span.set_attribute("repo_search.parser_mode", parser_mode)
 
-            embedding_queries = [item for item in parsed["embedding_queries"] if item.strip()]
+            parsed = finalize_search_plan(parsed, request.author_names)
+            if not parsed["embedding_queries"] and not parsed["author_names"]:
+                parsed = finalize_search_plan(parse_query_fallback(query), request.author_names)
+                parser_mode = normalize_parser_mode(
+                    parsed.get("parser_mode"), bool(parsed.get("used_fallback"))
+                )
+
+            embedding_queries = parsed["embedding_queries"]
+            author_names = parsed["author_names"]
+            search_mode = parsed["search_mode"]
             if span is not None:
                 span.set_attribute("repo_search.embedding_query_count", len(embedding_queries))
+                span.set_attribute("repo_search.search_mode", search_mode)
+                span.set_attribute("repo_search.author_filter_count", len(author_names))
                 span.set_attribute("repo_search.used_fallback", bool(parsed.get("used_fallback")))
                 span.set_attribute("repo_search.parser_mode", parser_mode)
             candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
             merged: dict[int, dict[str, Any]] = {}
             vector_candidate_count = 0
 
-            for embedding_query in embedding_queries:
-                with observe_retrieval_stage("search-service", "query_embedding"):
-                    query_vector = await embed_query(embedding_query)
-                rows = fetch_vector_results(query_vector, candidate_limit, parsed["year_from"], parsed["year_to"])
-                vector_candidate_count += len(rows)
+            if search_mode == "author":
+                rows = fetch_author_results(
+                    request.limit,
+                    parsed["year_from"],
+                    parsed["year_to"],
+                    author_names,
+                )
+                for rank, row in enumerate(rows, start=1):
+                    merged[row[0]] = {
+                        "id": row[0],
+                        "title": row[1],
+                        "abstract": row[2],
+                        "source_url": row[3],
+                        "date": row[4],
+                        "cosine_distance": None,
+                        "cosine_similarity": None,
+                        "repository": row[6],
+                        "authors": list(row[7] or []),
+                        "matched_query": None,
+                        "matched_queries": [],
+                        "best_rank": rank,
+                        "topic_boost": 0.0,
+                        "ranking_boost": 0.0,
+                        "coverage_boost": 0.0,
+                        "score": None,
+                    }
+            else:
+                for embedding_query in embedding_queries:
+                    with observe_retrieval_stage("search-service", "query_embedding"):
+                        query_vector = await embed_query(embedding_query)
+                    fetch_args = (
+                        query_vector,
+                        candidate_limit,
+                        parsed["year_from"],
+                        parsed["year_to"],
+                    )
+                    rows = (
+                        fetch_vector_results(*fetch_args, author_names)
+                        if author_names
+                        else fetch_vector_results(*fetch_args)
+                    )
+                    vector_candidate_count += len(rows)
 
-                with observe_retrieval_stage("search-service", "candidate_merge"):
                     for rank, row in enumerate(rows, start=1):
                         publication_id = row[0]
                         cosine_distance = float(row[5])
@@ -445,48 +593,51 @@ async def search(request: SearchRequest) -> dict[str, Any]:
             with observe_retrieval_stage("search-service", "ranking"):
                 results = []
                 for result in merged.values():
-                    topic_boost = phrase_boost(
-                        result["title"],
-                        result["abstract"],
-                        parsed.get("topic_phrases", []),
-                        TOPIC_TITLE_BOOST,
-                        TOPIC_ABSTRACT_BOOST,
-                    )
-                    ranking_boost = phrase_boost(
-                        result["title"],
-                        result["abstract"],
-                        parsed.get("ranking_phrases", []),
-                        RANKING_PHRASE_BOOST,
-                        RANKING_PHRASE_BOOST,
-                    )
-                    coverage_boost = min(len(result["matched_queries"]) * QUERY_COVERAGE_BOOST, 0.015)
-                    result["topic_boost"] = round(topic_boost, 6)
-                    result["ranking_boost"] = round(ranking_boost, 6)
-                    result["coverage_boost"] = round(coverage_boost, 6)
-                    result["score"] = round(result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost, 6)
-                    result["cosine_distance"] = round(result["cosine_distance"], 6)
-                    result["cosine_similarity"] = round(result["cosine_similarity"], 6)
+                    if search_mode != "author":
+                        topic_boost = phrase_boost(
+                            result["title"], result["abstract"], parsed.get("topic_phrases", []),
+                            TOPIC_TITLE_BOOST, TOPIC_ABSTRACT_BOOST,
+                        )
+                        ranking_boost = phrase_boost(
+                            result["title"], result["abstract"], parsed.get("ranking_phrases", []),
+                            RANKING_PHRASE_BOOST, RANKING_PHRASE_BOOST,
+                        )
+                        coverage_boost = min(len(result["matched_queries"]) * QUERY_COVERAGE_BOOST, 0.015)
+                        result["topic_boost"] = round(topic_boost, 6)
+                        result["ranking_boost"] = round(ranking_boost, 6)
+                        result["coverage_boost"] = round(coverage_boost, 6)
+                        result["score"] = round(
+                            result["cosine_similarity"] + topic_boost + ranking_boost + coverage_boost, 6
+                        )
+                        result["cosine_distance"] = round(result["cosine_distance"], 6)
+                        result["cosine_similarity"] = round(result["cosine_similarity"], 6)
                     result["date"] = serialize_datetime(result["date"])
                     result["matched_queries"] = sorted(result["matched_queries"])
                     results.append(result)
 
-                results.sort(key=lambda item: item["score"], reverse=True)
+                if search_mode != "author":
+                    results.sort(key=lambda item: (-item["score"], item["id"]))
                 results = results[:request.limit]
 
-            result_scores = [float(result["score"]) for result in results]
+            result_scores = [float(result["score"]) for result in results if result["score"] is not None]
             record_retrieval_search(
                 "search-service",
                 parser_mode,
                 len(embedding_queries),
                 vector_candidate_count,
                 result_scores,
+                result_count=len(results),
+                search_mode=search_mode,
+                author_filter_count=len(author_names),
             )
-            top_score = max(result_scores) if result_scores else 0
-            average_score = sum(result_scores) / len(result_scores) if result_scores else 0
+            top_score = max(result_scores) if result_scores else None
+            average_score = sum(result_scores) / len(result_scores) if result_scores else None
             log_fields = {
                 "query_length": len(query),
                 "parser_mode": parser_mode,
                 "embedding_query_count": len(embedding_queries),
+                "search_mode": search_mode,
+                "author_filter_count": len(author_names),
                 "vector_candidate_count": vector_candidate_count,
                 "result_count": len(results),
                 "top_score": top_score,
@@ -497,19 +648,20 @@ async def search(request: SearchRequest) -> dict[str, Any]:
             emit_app_event("search.completed", "search-service", **log_fields)
             if not results:
                 emit_app_event("search.zero_results", "search-service", **log_fields)
-            elif top_score < LOW_SCORE_THRESHOLD:
+            elif top_score is not None and top_score < LOW_SCORE_THRESHOLD:
                 emit_app_event("retrieval.low_score", "search-service", **log_fields)
 
             if span is not None:
                 span.set_attribute("repo_search.result_count", len(results))
                 span.set_attribute("repo_search.vector_candidates", vector_candidate_count)
-                if results:
+                if top_score is not None:
                     span.set_attribute("repo_search.top_score", results[0]["score"])
 
         return {
             "query": query,
             "limit": request.limit,
             "plan": parsed,
+            "search_mode": search_mode,
             "results": results,
             "total": len(results),
         }
