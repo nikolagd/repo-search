@@ -113,6 +113,33 @@ Completed grades are transferred only by exact `(query_id, publication_id)`. Bla
 
 The ignored dry-run artifact paths, hashes, transfer counts, and workbook are recorded in `.codex-tmp/handoffs/language-independent-lexical-baseline.md` after generation.
 
+### Frozen dry-run generated on 2026-08-09
+
+The isolated dry run is `.codex-tmp/evaluation/language-independent-lexical-depth5-dry-run-20260809`. It was generated from source commit `9c7208e42a12e5a2da65eeee2802f51f5616a1c6`, which descends directly from the recorded `test` starting commit `bb88a7bdfc65139ba2465cbc47f2347257b89001`.
+
+Protected input hashes all matched before generation and after workbook validation:
+
+- queries: `8fe5748b24f16f6c9e2d3037002eab1d4a613df1e1d419827da3768961d03f88`;
+- corpus snapshot: `b366854b50c7abb40b51c29a943f89fdd22b0af33cac6b6cd3371ff2404eebce`;
+- historical runs input: `86b36e45e377d42a07407150de14f309c4383f012466e22e5e3ae6d2db07264e`;
+- original scoring workbook: `0fff8874465fced16a8b4b2581884613eb4fb2846ce7c55ae932f42451a8381d`.
+
+Generated artifact hashes:
+
+- `language-independent-lexical-runs.json`: `e89a820142acb94e9e8a4a6e394ee670e2e535285ea47b13a58e7318078b2430`;
+- combined `runs.json`: `0240547bd1b9ab085ab26461d2b3fa8a09df2f6a5b750404864bcf8a35c24011`;
+- blinded `candidates.csv`: `51b5f4765e1b2aa36b6d396d41720f969d4f1aa9a758d53c1ff40c7e6fec7dad`;
+- `metadata.json`: `d77b8004c97a1520fb8d4fa59599d68cbfd6ad7ada5c6116a51b302676398273`;
+- `comparison/lexical-comparison.json`: `451c48dc61297a900328fe0f806f2fec517c4c34eecb6936e1af2a1bcd325ea3`;
+- expanded workbook: `b9fc752a571132ca5cf3b6ca50ac9b6a24a447d200414089b8a21eb192af8714`;
+- final judgment-transfer report: `419e8ac571ddeb01e102a802ccafa9b55ba3f73590d99bee83cee295925b8c75`.
+
+The pool contains 390 pairs. Relative to the historical raw-BM25 pool, 341 remain, 49 leave, and 49 enter. Of 253 completed judgments, 225 transfer exactly, 28 judged pairs leave the pool, the old workbook contains 137 blank rows, and the new workbook contains 165 unjudged rows. Conflicts, duplicate-pair errors, and invalid grades are all zero. These are workload/provenance counts, not effectiveness results.
+
+The validated workbook is `.codex-tmp/evaluation/language-independent-lexical-depth5-dry-run-20260809/manual-scoring/procena_relevantnosti_jezicki_nezavisna_leksicka_osnova_prosireno.xlsx`. It contains three rendered and reopened sheets, four long-abstract entries expanded across the dedicated full-text sheet, and zero detected formula errors.
+
+The non-qrels comparison retains 96 of 150 raw lexical top-five pairs and 341 of 390 full-pool pairs. Publication 4349 was inspected only after the method and run were frozen: it is outside depth five at ranks 17, 8, and 15 for q17, q19, and q20 respectively. This is post-hoc error analysis and is not a method-selection argument.
+
 ## Tests
 
 Automated tests cover deterministic ordering/scores; NFKC and case folding; Serbian Cyrillic and Latin; English and mixed text; preserved diacritics and combining marks; punctuation boundaries; short tokens, names, and abbreviations; empty/missing abstracts; exact metadata; invalid gram/RRF/CLI values; frozen hash rejection; no calls to semantic retrieval during isolated artifact generation; unchanged reused vector/full-pipeline records; blinded/deduplicated pooling; and stable-pair judgment transfer with blank/conflict/unmatched counts. Synthetic fixtures contain no frozen human relevance targets.
