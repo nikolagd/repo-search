@@ -50,7 +50,10 @@ def transfer_judgments(
     conflicts: list[dict[str, Any]] = []
     duplicate_errors: list[dict[str, Any]] = []
     invalid_scores: list[str] = []
+    old_row_count = 0
+    old_blank_row_count = 0
     for row_number, row in enumerate(old_rows, start=2):
+        old_row_count += 1
         pair = _pair(row, label="old assessment", row_number=row_number)
         try:
             relevance = _grade(row.get("relevance"), label="old assessment", pair=pair)
@@ -58,6 +61,7 @@ def transfer_judgments(
             invalid_scores.append(str(exc))
             continue
         if relevance is None:
+            old_blank_row_count += 1
             continue
         if pair in old_map:
             detail = {
@@ -109,8 +113,11 @@ def transfer_judgments(
     unmatched = sorted(set(old_map) - new_pairs)
     unjudged = sorted(new_pairs - set(old_map))
     report = {
+        "old_pool_row_count": old_row_count,
+        "old_blank_row_count": old_blank_row_count,
         "expected_old_judgments": expected_old_judgments,
         "observed_old_judgments": len(old_map),
+        "new_pool_row_count": len(new_pairs),
         "transferred_judgment_count": len(transferred_pairs),
         "unmatched_old_judgment_count": len(unmatched),
         "unmatched_old_judgments": [
@@ -165,6 +172,8 @@ def write_transfer_report(
             "",
             f"- OÄekivano starih ocena: {payload['expected_old_judgments']}",
             f"- UoÄeno starih ocena: {payload['observed_old_judgments']}",
+            f"- Praznih redova u starom skupu: {payload['old_blank_row_count']}",
+            f"- Redova u novom skupu: {payload['new_pool_row_count']}",
             f"- Preneto ocena: {payload['transferred_judgment_count']}",
             f"- Starih ocena bez para u novom skupu: {payload['unmatched_old_judgment_count']}",
             f"- Novih neocenjenih parova: {payload['new_unjudged_pair_count']}",
@@ -190,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_command.add_argument("--new-rows", required=True)
     apply_command.add_argument("--output-rows", required=True)
     apply_command.add_argument("--output-report", required=True)
-    apply_command.add_argument("--expected-old-judgments", type=int, default=69)
+    apply_command.add_argument("--expected-old-judgments", type=int, required=True)
     report_command = commands.add_parser("report")
     report_command.add_argument("--transfer-report", required=True)
     report_command.add_argument("--output-dir", required=True)

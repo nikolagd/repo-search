@@ -19,7 +19,7 @@ def _row(query_id, publication_id, relevance=""):
 
 
 def test_judgments_transfer_by_stable_pair_not_candidate_id() -> None:
-    old = [_row("q1", "p1", 2), _row("q1", "p2", 0)]
+    old = [_row("q1", "p1", 2), _row("q1", "p2", 0), _row("q1", "blank")]
     new = [
         {**_row("q1", "p2"), "candidate_id": "new-C1"},
         {**_row("q1", "p3"), "candidate_id": "new-C2"},
@@ -30,6 +30,9 @@ def test_judgments_transfer_by_stable_pair_not_candidate_id() -> None:
 
     assert [row["relevance"] for row in rows] == [0, "", 2]
     assert report["transferred_judgment_count"] == 2
+    assert report["old_pool_row_count"] == 3
+    assert report["old_blank_row_count"] == 1
+    assert report["new_pool_row_count"] == 3
     assert report["new_unjudged_pairs"] == [{"query_id": "q1", "publication_id": "p3"}]
     assert report["unmatched_old_judgments"] == []
 

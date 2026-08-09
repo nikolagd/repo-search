@@ -1,5 +1,7 @@
 # Final BM25 comparison protocol
 
+> Historical protocol: this file preserves the raw-BM25 evaluation design. The replacement candidate protocol is `LANGUAGE_INDEPENDENT_LEXICAL_BASELINE.md`, whose method ID is `language_independent_lexical`. Raw `bm25` remains reproducible but is no longer the candidate pool's lexical method.
+
 The final thesis comparison uses all 30 frozen queries and exactly three methods: `bm25`, `vector_only`, and `full_pipeline`. The candidate set is the method-blind union of each method's first five results for each query, deduplicated by `(query_id, publication_id)` with seed `2026`. Every pooled pair must receive a manual 0/1/2 relevance judgment before final effectiveness results are calculated.
 
 The primary relevance metrics are **Precision@5**, **nDCG@5**, and **MRR@5**. This pooled depth supports claims only through rank 5. Recall, Recall@10, nDCG@10, unbounded MRR, and result quality below rank 5 must not be reported as conclusions from this pool. Generic evaluator output may contain those reusable fields; they are outside this protocol and must be ignored for the final comparison.
