@@ -5,7 +5,7 @@
 ## Method Boundaries
 
 - `keyword` uses `KeywordBaselineAdapter` over the publication metadata loaded from the frozen database. Its existing NFKC/case-fold/token-frequency scoring and score-then-string-ID ordering are unchanged. It is an internal baseline, not a reproduction of DSpace, Google Scholar, PostgreSQL full-text ranking, or another search engine.
-- `bm25` is the final lexical comparator. It uses pinned `bm25s==0.3.10`, its `lucene` scoring variant, `k1=1.2`, `b=0.75`, separate title and abstract indexes, and the documented field combination `2.0 * title BM25 + abstract BM25`. Tokenization is Unicode NFKC plus case-folding and Unicode word tokens, without stemming or stop-word removal. Equal scores end with ascending string `publication_id`.
+- `language_independent_lexical` is the final candidate lexical comparator. It combines a Unicode word BM25 ranking and a within-word character 4-gram BM25 ranking using reciprocal-rank fusion with fixed `k=60`. Both components use pinned `bm25s==0.3.10`, its `lucene` variant, `k1=1.2`, `b=0.75`, separate title/abstract indexes, and `2.0 * title BM25 + abstract BM25`. It is not cross-lingual retrieval: it never translates or maps Serbian terms to English terms. Historical raw `bm25` remains selectable for reproduction.
 - `vector_only` sends the original query directly to Embedding Service `/embed/query`, never calls Query Service, and executes the shared production pgvector retrieval helper without years, phrases, boosts, candidate merging, or coverage logic. Evaluation adds `publication.id ASC` only as a deterministic equal-distance tie-breaker; production search keeps its existing tie behavior.
 - `full_pipeline` sends the exact query to Gateway `/api/search`. Gateway/Search/Query/Embedding services own parsing and ranking. The collector preserves returned order, scores, and `plan.parser_mode` and does not reimplement ranking.
 
@@ -13,7 +13,7 @@ Every method result must reference a publication loaded from the verified frozen
 
 Keyword, BM25, and vector-only share one PostgreSQL `REPEATABLE READ`, `READ ONLY` transaction. Full pipeline uses service-owned transactions; therefore stopped corpus writers plus pre/post corpus verification are the cross-boundary consistency safeguard.
 
-BM25 is a reproducible Solr/Lucene-style lexical baseline over the frozen local corpus. It is not claimed to reproduce Google Scholar, and it is not claimed to be byte-for-byte identical to either source repository's DSpace/Solr configuration. Live RFOS/REPFF search is not used as the primary comparator because its indexes and configuration can change and raw scores cannot be merged across repositories.
+The language-independent lexical method is a reproducible classic lexical baseline over the frozen local corpus. Unicode-aware analysis avoids hard-coding one language but adds no multilingual understanding or semantic equivalence. It is not claimed to reproduce Google Scholar or either source repository's DSpace/Solr configuration. Live RFOS/REPFF search is not used as the primary comparator because its indexes and configuration can change and raw scores cannot be merged across repositories.
 
 ## Required Runtime Configuration
 
@@ -50,7 +50,7 @@ Run the collector only after those read-path services are ready:
 docker compose --env-file .codex-tmp/evaluation/repo-search-eval.env --project-name repo-search-eval -f docker-compose.microservices.yml -f .codex-tmp/evaluation/docker-compose.eval.override.yml -f evaluation/docker-compose.collect-runs.yml run --rm --no-deps evaluation-runner collect-runs `
   --queries /evaluation-input/queries.json `
   --output /evaluation-output/runs.json `
-  --methods bm25 vector_only full_pipeline `
+  --methods language_independent_lexical vector_only full_pipeline `
   --limit 20 `
   --database-url-env EVALUATION_DATABASE_URL `
   --api-token-env EVALUATION_API_TOKEN `

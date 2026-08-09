@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.adapters import BM25BaselineAdapter, bm25_metadata
-from evaluation.collector import FINAL_METHODS, write_runs_atomically
+from evaluation.collector import write_runs_atomically
 from evaluation.io import (
     load_queries,
     load_runs,
@@ -23,6 +23,7 @@ from evaluation.pooling import build_candidate_pool
 
 
 FROZEN_METHODS = {"keyword", "vector_only", "full_pipeline"}
+BM25_ARTIFACT_METHODS = ("bm25", "vector_only", "full_pipeline")
 
 
 def _require_hash(path: str | Path, expected: str, *, label: str) -> str:
@@ -117,16 +118,20 @@ def build_artifacts(
         if method == "bm25"
         else frozen_by_pair[(query.query_id, method)]
         for query in queries
-        for method in FINAL_METHODS
+        for method in BM25_ARTIFACT_METHODS
     ]
-    validate_comparison_matrix(combined, {query.query_id for query in queries}, set(FINAL_METHODS))
+    validate_comparison_matrix(
+        combined,
+        {query.query_id for query in queries},
+        set(BM25_ARTIFACT_METHODS),
+    )
 
     output = Path(output_directory)
     if output.exists():
         raise ValueError(f"output already exists: {output.name}")
     output.mkdir(parents=True)
     write_runs_atomically(output / "bm25-runs.json", bm25_runs, queries, ["bm25"])
-    write_runs_atomically(output / "runs.json", combined, queries, FINAL_METHODS)
+    write_runs_atomically(output / "runs.json", combined, queries, BM25_ARTIFACT_METHODS)
     candidates = build_candidate_pool(
         combined,
         depth,
@@ -140,7 +145,7 @@ def build_artifacts(
     write_json(
         output / "metadata.json",
         {
-            "methods": list(FINAL_METHODS),
+            "methods": list(BM25_ARTIFACT_METHODS),
             "bm25": bm25_metadata(),
             "corpus_size": len(publications),
             "query_count": len(queries),

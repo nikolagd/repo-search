@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import platform
 import re
 import time
 import unicodedata
@@ -20,11 +21,56 @@ BM25_B = 0.75
 BM25_TITLE_BOOST = 2.0
 BM25_LIBRARY = "bm25s"
 BM25_LIBRARY_VERSION = version(BM25_LIBRARY)
+LANGUAGE_INDEPENDENT_LEXICAL_METHOD = "language_independent_lexical"
+LANGUAGE_INDEPENDENT_LEXICAL_VERSION = "1.0"
+LANGUAGE_INDEPENDENT_ANALYZER_VERSION = "unicode-word-char4-v1"
+CHAR_NGRAM_SIZE = 4
+RRF_K = 60
 
 
 def tokenize(text: str | None) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text or "").casefold()
     return TOKEN_PATTERN.findall(normalized)
+
+
+def normalize_language_independent_text(text: str | None) -> str:
+    """Apply the complete language-neutral normalization used by the v1 baseline."""
+
+    return unicodedata.normalize("NFKC", text or "").casefold()
+
+
+def language_independent_word_tokens(text: str | None) -> list[str]:
+    """Split normalized text on every code point except letters, marks, and numbers."""
+
+    tokens: list[str] = []
+    current: list[str] = []
+    for character in normalize_language_independent_text(text):
+        if unicodedata.category(character)[0] in {"L", "M", "N"}:
+            current.append(character)
+        elif current:
+            tokens.append("".join(current))
+            current = []
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def language_independent_character_ngrams(
+    text: str | None,
+    *,
+    size: int = CHAR_NGRAM_SIZE,
+) -> list[str]:
+    """Return overlapping within-token character n-grams with a short-token fallback."""
+
+    if type(size) is not int or size <= 0:
+        raise ValueError("character n-gram size must be a positive integer")
+    grams: list[str] = []
+    for token in language_independent_word_tokens(text):
+        if len(token) < size:
+            grams.append(token)
+        else:
+            grams.extend(token[offset : offset + size] for offset in range(len(token) - size + 1))
+    return grams
 
 
 class _BM25FieldIndex:
@@ -41,6 +87,17 @@ class _BM25FieldIndex:
         if self.model is None or not query_terms:
             return [0.0] * self.size
         return self.model.get_scores(query_terms)
+
+
+def _logical_index_statistics(corpus: list[list[str]]) -> dict[str, int]:
+    vocabulary = set(term for document in corpus for term in document)
+    return {
+        "document_count": len(corpus),
+        "nonempty_document_count": sum(bool(document) for document in corpus),
+        "term_occurrence_count": sum(len(document) for document in corpus),
+        "unique_term_count": len(vocabulary),
+        "unique_term_utf8_bytes": sum(len(term.encode("utf-8")) for term in vocabulary),
+    }
 
 
 class KeywordBaselineAdapter:
@@ -164,6 +221,188 @@ def bm25_metadata() -> dict[str, Any]:
         "field_combination": "2.0 * title BM25 score + abstract BM25 score",
         "tie_breaker": "publication_id ascending",
     }
+
+
+class LanguageIndependentLexicalAdapter:
+    """Strictly lexical word/character BM25 fused by reciprocal rank fusion."""
+
+    method = LANGUAGE_INDEPENDENT_LEXICAL_METHOD
+
+    def __init__(
+        self,
+        publications: Iterable[dict[str, Any]],
+        *,
+        k1: float = BM25_K1,
+        b: float = BM25_B,
+        title_boost: float = BM25_TITLE_BOOST,
+        character_ngram_size: int = CHAR_NGRAM_SIZE,
+        rrf_k: int = RRF_K,
+    ):
+        self.publications = list(publications)
+        if not self.publications:
+            raise ValueError("language-independent lexical corpus must not be empty")
+        if k1 < 0 or not 0 <= b <= 1 or title_boost <= 0:
+            raise ValueError("invalid BM25 parameters")
+        if type(character_ngram_size) is not int or character_ngram_size <= 0:
+            raise ValueError("character n-gram size must be a positive integer")
+        if type(rrf_k) is not int or rrf_k < 0:
+            raise ValueError("RRF k must be a non-negative integer")
+        self.k1 = k1
+        self.b = b
+        self.title_boost = title_boost
+        self.character_ngram_size = character_ngram_size
+        self.rrf_k = rrf_k
+
+        word_title = [
+            language_independent_word_tokens(item.get("title")) for item in self.publications
+        ]
+        word_abstract = [
+            language_independent_word_tokens(item.get("abstract")) for item in self.publications
+        ]
+        char_title = [
+            language_independent_character_ngrams(item.get("title"), size=character_ngram_size)
+            for item in self.publications
+        ]
+        char_abstract = [
+            language_independent_character_ngrams(item.get("abstract"), size=character_ngram_size)
+            for item in self.publications
+        ]
+        self.index_statistics = {
+            "measurement": "logical analyzer output; not serialized bm25s bytes",
+            "word": {
+                "title": _logical_index_statistics(word_title),
+                "abstract": _logical_index_statistics(word_abstract),
+            },
+            "character_4gram": {
+                "title": _logical_index_statistics(char_title),
+                "abstract": _logical_index_statistics(char_abstract),
+            },
+        }
+        self._word_title_index = _BM25FieldIndex(word_title, k1=k1, b=b)
+        self._word_abstract_index = _BM25FieldIndex(word_abstract, k1=k1, b=b)
+        self._char_title_index = _BM25FieldIndex(char_title, k1=k1, b=b)
+        self._char_abstract_index = _BM25FieldIndex(char_abstract, k1=k1, b=b)
+
+    def _component_ranks(
+        self,
+        title_index: _BM25FieldIndex,
+        abstract_index: _BM25FieldIndex,
+        query_terms: list[str],
+    ) -> dict[int, int]:
+        title_scores = title_index.get_scores(query_terms)
+        abstract_scores = abstract_index.get_scores(query_terms)
+        scores = [
+            float(self.title_boost * title_scores[index] + abstract_scores[index])
+            for index in range(len(self.publications))
+        ]
+        ranked = sorted(
+            (index for index, score in enumerate(scores) if score > 0),
+            key=lambda index: (-scores[index], str(self.publications[index]["id"])),
+        )
+        return {index: rank for rank, index in enumerate(ranked, start=1)}
+
+    async def retrieve(self, query: EvaluationQuery, limit: int) -> QueryRun:
+        if type(limit) is not int or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        started = time.perf_counter()
+        word_ranks = self._component_ranks(
+            self._word_title_index,
+            self._word_abstract_index,
+            language_independent_word_tokens(query.text),
+        )
+        char_ranks = self._component_ranks(
+            self._char_title_index,
+            self._char_abstract_index,
+            language_independent_character_ngrams(
+                query.text,
+                size=self.character_ngram_size,
+            ),
+        )
+        fused_scores: dict[int, float] = {}
+        for ranks in (word_ranks, char_ranks):
+            for index, rank in ranks.items():
+                fused_scores[index] = fused_scores.get(index, 0.0) + 1.0 / (self.rrf_k + rank)
+        ranked_indices = sorted(
+            fused_scores,
+            key=lambda index: (-fused_scores[index], str(self.publications[index]["id"])),
+        )
+        results = [
+            RetrievedItem(
+                publication_id=str(self.publications[index]["id"]),
+                score=fused_scores[index],
+                title=self.publications[index].get("title"),
+                abstract=self.publications[index].get("abstract"),
+                source_url=self.publications[index].get("source_url"),
+            )
+            for index in ranked_indices[:limit]
+        ]
+        return QueryRun(
+            query.query_id,
+            self.method,
+            results,
+            latency_ms=(time.perf_counter() - started) * 1000,
+        )
+
+
+def language_independent_lexical_metadata(
+    *,
+    index_statistics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "method_id": LANGUAGE_INDEPENDENT_LEXICAL_METHOD,
+        "method_version": LANGUAGE_INDEPENDENT_LEXICAL_VERSION,
+        "algorithm": "RRF(word BM25, within-token character 4-gram BM25)",
+        "implementation": BM25_LIBRARY,
+        "implementation_version": BM25_LIBRARY_VERSION,
+        "python_version": platform.python_version(),
+        "unicode_database_version": unicodedata.unidata_version,
+        "bm25_variant": "lucene",
+        "bm25_parameters": {"k1": BM25_K1, "b": BM25_B},
+        "analyzer_id": LANGUAGE_INDEPENDENT_ANALYZER_VERSION,
+        "normalization_steps": [
+            "replace null with empty string",
+            "Unicode NFKC normalization",
+            "Unicode default case folding",
+            "split at code points whose Unicode general category is not Letter, Mark, or Number",
+        ],
+        "diacritics": "preserved",
+        "transliteration": None,
+        "stop_words": None,
+        "stemming": None,
+        "lemmatization": None,
+        "word_tokens": "maximal runs of Unicode Letter/Mark/Number code points",
+        "character_ngrams": {
+            "minimum_n": CHAR_NGRAM_SIZE,
+            "maximum_n": CHAR_NGRAM_SIZE,
+            "boundaries": "within word tokens only; punctuation and whitespace never crossed",
+            "boundary_markers": False,
+            "short_token_rule": "a token shorter than four code points is emitted whole once",
+        },
+        "fields": [
+            {"name": "title", "boost": BM25_TITLE_BOOST},
+            {"name": "abstract", "boost": 1.0},
+        ],
+        "component_field_combination": "2.0 * title BM25 score + abstract BM25 score",
+        "fusion": {
+            "method": "reciprocal_rank_fusion",
+            "k": RRF_K,
+            "components": ["word_bm25", "character_4gram_bm25"],
+            "component_weights": "equal; one reciprocal-rank contribution per component",
+            "missing_document_contribution": 0.0,
+        },
+        "tie_breaking": [
+            "component BM25 score descending, then publication_id ascending",
+            "fused RRF score descending, then publication_id ascending",
+        ],
+        "semantic_components": [],
+        "operating_assumption": "same-language lexical overlap or shared surface forms",
+        "cross_language_mapping": None,
+        "cross_lingual_retrieval": False,
+        "multilingual_semantic_understanding": False,
+    }
+    if index_statistics is not None:
+        metadata["index_statistics"] = index_statistics
+    return metadata
 
 
 async def _resolve(value: Any) -> Any:

@@ -6,7 +6,11 @@ from evaluation.adapters import (
     BM25BaselineAdapter,
     FullPipelineAdapter,
     KeywordBaselineAdapter,
+    LanguageIndependentLexicalAdapter,
     VectorOnlyAdapter,
+    language_independent_character_ngrams,
+    language_independent_lexical_metadata,
+    language_independent_word_tokens,
     tokenize,
 )
 from evaluation.models import EvaluationQuery
@@ -97,6 +101,94 @@ def test_bm25_title_score_has_documented_two_times_boost() -> None:
 
     assert [item.publication_id for item in run.results] == ["title", "abstract"]
     assert run.results[0].score == pytest.approx(2 * run.results[1].score)
+
+
+def test_language_independent_analysis_is_unicode_aware_and_preserves_scripts() -> None:
+    text = "\uff21I, VE\u0160TA\u010cKA; \u0412\u0415\u0428\u0422\u0410\u0427\u041a\u0410 na\u00efve \u0111ak!"
+
+    assert language_independent_word_tokens(text) == [
+        "ai",
+        "ve\u0161ta\u010dka",
+        "\u0432\u0435\u0448\u0442\u0430\u0447\u043a\u0430",
+        "na\u00efve",
+        "\u0111ak",
+    ]
+    assert language_independent_character_ngrams("AI C++ ime") == ["ai", "c", "ime"]
+    assert language_independent_character_ngrams("repo-search") == [
+        "repo",
+        "sear",
+        "earc",
+        "arch",
+    ]
+
+
+def test_language_independent_analysis_handles_compatibility_and_combining_marks() -> None:
+    assert language_independent_word_tokens("\uff36E\u0160TA\u010cKA") == ["ve\u0161ta\u010dka"]
+    assert language_independent_word_tokens("A\u030A") == ["\u00e5"]
+    assert language_independent_word_tokens(None) == []
+    assert language_independent_character_ngrams("") == []
+    with pytest.raises(ValueError, match="positive integer"):
+        language_independent_character_ngrams("tekst", size=0)
+
+
+def test_language_independent_lexical_ranking_is_deterministic_for_mixed_text() -> None:
+    corpus = [
+        {
+            "id": "2",
+            "title": "Digitalni repozitorijumi",
+            "abstract": "open science and research data",
+        },
+        {
+            "id": "1",
+            "title": "\u0414\u0438\u0433\u0438\u0442\u0430\u043b\u043d\u0438 \u0440\u0435\u043f\u043e\u0437\u0438\u0442\u043e\u0440\u0438\u0458\u0443\u043c\u0438",
+            "abstract": "\u043e\u0442\u0432\u043e\u0440\u0435\u043d\u0430 \u043d\u0430\u0443\u043a\u0430",
+        },
+        {"id": "3", "title": "AI", "abstract": None},
+        {"id": "4", "title": "Nepovezano", "abstract": "druga tema"},
+    ]
+    adapter = LanguageIndependentLexicalAdapter(corpus)
+    query = EvaluationQuery("q1", "digitalni repozitorijumi open science")
+
+    first = asyncio.run(adapter.retrieve(query, 10))
+    second = asyncio.run(adapter.retrieve(query, 10))
+
+    assert first.method == "language_independent_lexical"
+    assert first.results[0].publication_id == "2"
+    assert [(item.publication_id, item.score) for item in first.results] == [
+        (item.publication_id, item.score) for item in second.results
+    ]
+    assert all(item.publication_id != "1" for item in first.results)
+
+
+def test_language_independent_lexical_handles_short_query_and_missing_abstract() -> None:
+    corpus = [
+        {"id": "2", "title": "AI", "abstract": None},
+        {"id": "1", "title": "AI", "abstract": ""},
+        {"id": "3", "title": "ML", "abstract": None},
+    ]
+    run = asyncio.run(
+        LanguageIndependentLexicalAdapter(corpus).retrieve(EvaluationQuery("q1", "AI"), 5)
+    )
+
+    assert [item.publication_id for item in run.results] == ["1", "2"]
+
+
+def test_language_independent_metadata_is_complete_and_explicitly_non_cross_lingual() -> None:
+    metadata = language_independent_lexical_metadata()
+
+    assert metadata["method_id"] == "language_independent_lexical"
+    assert metadata["bm25_parameters"] == {"k1": 1.2, "b": 0.75}
+    assert metadata["character_ngrams"]["minimum_n"] == 4
+    assert metadata["fusion"] == {
+        "method": "reciprocal_rank_fusion",
+        "k": 60,
+        "components": ["word_bm25", "character_4gram_bm25"],
+        "component_weights": "equal; one reciprocal-rank contribution per component",
+        "missing_document_contribution": 0.0,
+    }
+    assert metadata["semantic_components"] == []
+    assert metadata["cross_lingual_retrieval"] is False
+    assert metadata["cross_language_mapping"] is None
 
 
 def test_vector_adapter_uses_original_query_and_existing_fetch_shape() -> None:

@@ -320,10 +320,11 @@ def test_incomplete_matrix_and_unknown_method_fail_before_output(tmp_path) -> No
         validate_methods(["keyword", "keyword"])
 
 
-def test_final_method_set_defaults_to_bm25_and_retains_legacy_keyword_support() -> None:
-    assert FINAL_METHODS == ("bm25", "vector_only", "full_pipeline")
+def test_final_method_set_uses_language_independent_lexical_and_retains_historical_methods() -> None:
+    assert FINAL_METHODS == ("language_independent_lexical", "vector_only", "full_pipeline")
     assert validate_methods(FINAL_METHODS) == list(FINAL_METHODS)
     assert validate_methods(["keyword"]) == ["keyword"]
+    assert validate_methods(["bm25"]) == ["bm25"]
 
 
 def test_empty_queries_invalid_limits_and_oversized_pipeline_query_fail_early() -> None:
