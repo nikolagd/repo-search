@@ -1,3 +1,5 @@
+import pytest
+
 from microservices.search_service.vector_search import execute_author_search, execute_vector_search, normalize_author_tokens
 
 
@@ -69,13 +71,15 @@ def test_author_filters_use_token_level_all_semantics() -> None:
     )
 
     assert connection.last_cursor.sql.count("AND EXISTS") == 2
-    assert connection.last_cursor.sql.count("bool_and") == 2
+    assert connection.last_cursor.sql.count("repo_search_author_matches") == 2
     assert "WITH filtered AS MATERIALIZED" in connection.last_cursor.sql
     assert connection.last_cursor.params == [
         "2020-01-01",
         "2024-12-31",
         ["ime", "prezime"],
+        [False, False],
         ["drugi", "autor"],
+        [False, False],
         [1.0],
         10,
     ]
@@ -87,5 +91,17 @@ def test_author_only_order_and_normalization_are_deterministic() -> None:
 
     assert "p.date DESC NULLS LAST" in connection.last_cursor.sql
     assert "lower(COALESCE(p.title, '')) ASC, p.id ASC" in connection.last_cursor.sql
-    assert connection.last_cursor.params == [["prezime", "cedomir"], 5]
-    assert normalize_author_tokens("Đorđe Šarić") == ["dorde", "saric"]
+    assert connection.last_cursor.params == [["prezime", "cedomir"], [False, False], 5]
+    assert normalize_author_tokens("Đorđe Šarić") == ["djordje", "saric"]
+
+
+def test_initials_are_conservative_and_selected_ids_are_exact_constraints() -> None:
+    connection = Connection()
+    execute_author_search(connection, 5, None, None, ["P. Petrović"], [42])
+
+    assert "repo_search_author_matches" in connection.last_cursor.sql
+    assert "selected_author_pa.author_id = %s" in connection.last_cursor.sql
+    assert connection.last_cursor.params == [["p", "petrovic"], [True, False], 42, 5]
+
+    with pytest.raises(ValueError, match="full surname"):
+        execute_author_search(connection, 5, None, None, ["P. P."])

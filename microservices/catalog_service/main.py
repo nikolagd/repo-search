@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 
 from microservices.common.app_logging import emit_app_event
+from microservices.common.author_names import AUTHOR_SEARCH_SCHEMA_SQL
 from microservices.common.db import get_connection
 from microservices.common.health import (
     build_health_response,
@@ -271,6 +272,7 @@ def ensure_schema() -> None:
                     ON publication USING ivfflat (embedding vector_cosine_ops);
                 """
             )
+            cur.execute(AUTHOR_SEARCH_SCHEMA_SQL)
         conn.commit()
     finally:
         conn.close()

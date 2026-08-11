@@ -230,6 +230,11 @@ async def search(request: Request) -> Response:
     return await proxy_request(request, SEARCH_SERVICE_URL, "/search")
 
 
+@app.api_route("/api/authors/suggestions", methods=["GET"], dependencies=[Depends(require_api_token)])
+async def author_suggestions(request: Request) -> Response:
+    return await proxy_request(request, SEARCH_SERVICE_URL, "/authors/suggestions")
+
+
 @app.api_route("/api/auth/{path:path}", methods=["GET", "POST"], dependencies=[Depends(require_api_token)])
 async def auth_proxy(path: str, request: Request) -> Response:
     return await proxy_request(request, AUTH_SERVICE_URL, f"/auth/{path}")

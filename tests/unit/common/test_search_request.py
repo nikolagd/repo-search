@@ -32,3 +32,17 @@ def test_search_request_deduplicates_explicit_authors_case_insensitively() -> No
     request = SearchRequest(author_names=["Ime Prezime", " ime prezime ", "Drugi Autor"])
 
     assert request.author_names == ["Ime Prezime", "Drugi Autor"]
+
+
+def test_search_request_accepts_deduplicates_and_validates_selected_author_ids() -> None:
+    request = SearchRequest(author_ids=[3, 3, 7])
+    assert request.author_ids == [3, 7]
+
+    for invalid in ([0], [-1], [True], ["3"]):
+        with pytest.raises(ValidationError):
+            SearchRequest(author_ids=invalid)  # type: ignore[arg-type]
+
+
+def test_search_request_rejects_initial_only_author_filters() -> None:
+    with pytest.raises(ValidationError, match="full surname"):
+        SearchRequest(author_names=["P. P."])
