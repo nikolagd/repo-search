@@ -2,6 +2,8 @@
 
 Ovo uputstvo je arhivirano zato što je GPU Kubernetes deployment sada primarni način pokretanja. Docker Compose zadržava GPU kao obavezan režim za lokalni smoke test, debugging ili poređenje sa Kubernetes manifestima.
 
+Compose servisi nemaju automatsku restart politiku. Ceo stack se pokreće i zaustavlja eksplicitno kako posle restartovanja Docker Desktop-a ne bi ostao aktivan samo deo sistema niti zauzeo GPU koji koristi Minikube.
+
 ## 1. Preduslovi
 
 Potrebno je:
