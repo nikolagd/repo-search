@@ -4,15 +4,19 @@ Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](d
 
 ## Režimi pretrage i filter autora
 
-Search API prihvata `query`, opciono polje `author_names` sa najviše 10 imena i `limit`. Zahtev mora imati neprazan tekst upita, najmanje jednog autora ili oba. Trusted kod, a ne LLM, izvodi jedan od tri režima:
+Search API prihvata `query`, opcione liste `author_names` i `author_ids`, opcioni `author_match` i `limit`. Zahtev mora imati neprazan tekst upita, najmanje jedan autorski uslov ili oba. Trusted kod, a ne LLM, izvodi jedan od tri režima:
 
 - `semantic`: tematski upit bez autora;
 - `author`: jedan ili više autora bez tematskog upita; Embedding Service se ne poziva;
 - `hybrid`: tematski embedding uz strukturisane filtere autora i godine.
 
-Imena autora se nikada ne dodaju u embedding publikacije niti se vektorizuju. Pretraga koristi postojeće relacije `author` i `publication_author`. Svi tokeni jednog filtera moraju pripadati istom zapisu autora, a više filtera ima AND semantiku: publikacija mora odgovarati svakom navedenom autoru. Poređenje je neosetljivo na velika slova, interpunkciju, redosled tokena (`Ime Prezime` odgovara `Prezime, Ime`) i srpske latinične dijakritike. Nije potrebna PostgreSQL `unaccent` ekstenzija niti nova denormalizovana kolona.
+Imena autora se nikada ne dodaju u embedding publikacije niti se vektorizuju. Pretraga koristi relacije `author` i `publication_author`. Ručno uneto ime prolazi kroz determinističku kanonizaciju srpske ćirilice i latinice, dijakritika, interpunkcije, redosleda tokena i kontrolisanih inicijala. Izbor predloga prosleđuje tačan lokalni `author.id`. `pg_trgm` i generated `author.search_name` kolona koriste se samo za pronalaženje i rangiranje predloga; fuzzy sličnost nije uslov za filtriranje publikacija.
 
-Author-only rezultati su deterministički poređani po datumu opadajuće (`NULLS LAST`), zatim po naslovu i ID-u. Nemaju izmišljenu kosinusnu sličnost niti skor. Frontend nudi ponovljivi author chip filter; eksplicitne vrednosti imaju prvenstvo i bezbedno se spajaju sa autorima koje izdvoji parser. Fallback parser konzervativno prepoznaje samo eksplicitne oblike kao `autor: Ime Prezime`, `radovi autora Ime Prezime`, `publikacije autora Ime Prezime` i `papers by Name`. Srpsku padežnu fleksiju nije moguće pouzdano vratiti na kanonsko ime, pa je eksplicitni frontend filter autoritativna putanja za tačno ime.
+Kod više autora `author_match=any` prihvata publikaciju povezanu sa bar jednim navedenim autorom, dok `author_match=all` zahteva sve navedene autore. Opšte ili dvosmislene liste podrazumevaju `any`. Eksplicitni oblici za zajedničke ili koautorske radove daju `all`, a ručni izbor korisnika ima prednost nad parser-om.
+
+Query Service i fallback parser izdvajaju samo obeležene autorske konstrukcije. Imena prepoznata u glavnom upitu vraćaju se kao `extracted_author_names` u postojećem search odgovoru i frontend ih prikazuje kao query oznake bez dodatnog LLM poziva. Ona se ne pretvaraju automatski u lokalne ID vrednosti. Fallback podržava oblike kao `autor: Ime Prezime`, `radovi autora Ime Prezime`, obeležene liste sa `i`/`ili`, `papers by Name`, kao i eksplicitne oblike za koautorstvo. Proizvoljan tekst koji samo liči na ime ne tumači se automatski kao autor.
+
+Author-only rezultati su deterministički poređani po datumu opadajuće (`NULLS LAST`), zatim po naslovu i ID-u. Nemaju izmišljenu kosinusnu sličnost niti skor. U author-only režimu Query i Embedding servisi se ne pozivaju; u hybrid režimu autorski uslov ograničava kandidate pre vektorskog rangiranja.
 
 ## 1. Preduslovi
 
