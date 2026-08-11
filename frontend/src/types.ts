@@ -41,6 +41,7 @@ export interface SearchPlan {
   ranking_phrases: string[];
   interpreted_query: string;
   used_fallback: boolean;
+  parser_mode?: string;
 }
 
 export interface AuthorSuggestion {
