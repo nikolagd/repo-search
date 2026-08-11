@@ -465,6 +465,13 @@ input:focus {
   font-size: 0.82rem;
 }
 
+.query-plan-modes {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+}
+
 .empty-state {
   min-height: 380px;
   display: grid;
@@ -1036,6 +1043,10 @@ input:focus {
 
   .overview {
     grid-template-columns: 1fr;
+  }
+
+  .query-plan-modes {
+    flex-wrap: wrap;
   }
 
   .model-card-grid,
