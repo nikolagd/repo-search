@@ -16,9 +16,9 @@ services:
         target: /workspace
         read_only: true
       - type: bind
-        source: ${EVALUATION_QUERIES_DIR:-./.codex-tmp/evaluation/queries}
+        source: ${EVALUATION_QUERIES_DIR:-./.local-artifacts/evaluation/queries}
         target: /evaluation-input
         read_only: true
       - type: bind
-        source: ${EVALUATION_RUNS_DIR:-./.codex-tmp/evaluation/runs}
+        source: ${EVALUATION_RUNS_DIR:-./.local-artifacts/evaluation/runs}
         target: /evaluation-output

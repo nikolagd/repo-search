@@ -113,16 +113,16 @@ rejected, and exact token values are scanned before publication.
 
 ```powershell
 $env:PERFORMANCE_API_TOKEN = "<runtime token>"
-.\.venv\Scripts\python.exe -m performance_measurement search --config .\config.json --deployment-evidence .\deployment-evidence.json --queries .\queries.json --output-dir .\.codex-tmp\performance\compose-search
-.\.venv\Scripts\python.exe -m performance_measurement resources --config .\config.json --deployment-evidence .\deployment-evidence.json --output-dir .\.codex-tmp\performance\compose-resources
-.\.venv\Scripts\python.exe -m performance_measurement backfill --config .\config.json --deployment-evidence .\deployment-evidence.json --output-dir .\.codex-tmp\performance\compose-backfill
+.\.venv\Scripts\python.exe -m performance_measurement search --config .\config.json --deployment-evidence .\deployment-evidence.json --queries .\queries.json --output-dir .\.local-artifacts\performance\compose-search
+.\.venv\Scripts\python.exe -m performance_measurement resources --config .\config.json --deployment-evidence .\deployment-evidence.json --output-dir .\.local-artifacts\performance\compose-resources
+.\.venv\Scripts\python.exe -m performance_measurement backfill --config .\config.json --deployment-evidence .\deployment-evidence.json --output-dir .\.local-artifacts\performance\compose-backfill
 Remove-Item Env:PERFORMANCE_API_TOKEN -ErrorAction SilentlyContinue
 ```
 
 Each output directory contains `measurement.json`, `samples.csv`, `summary.md`,
 and `SHA256SUMS`. It is built in a temporary sibling directory and atomically
 published. Existing output is protected unless `--overwrite` is explicit.
-`.codex-tmp/performance` is reserved for later approved real runs and remains
+`.local-artifacts/performance` is reserved for approved real runs and remains
 untracked.
 
 Search query input is strict and query text is not copied into outputs:

@@ -128,7 +128,7 @@ def fake_oai_repository():
 
 @pytest.fixture
 def harvest_output_dir() -> Path:
-    output_dir = Path.cwd() / ".codex-tmp" / f"harvest-test-{uuid4().hex}"
+    output_dir = Path.cwd() / ".local-artifacts" / f"harvest-test-{uuid4().hex}"
     output_dir.mkdir(parents=True)
     try:
         yield output_dir

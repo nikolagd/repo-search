@@ -213,5 +213,12 @@ docs/*
 !docs/ci-workflow.md
 !docs/observability.md
 !docs/docker-compose-microservices.md
+
+# Local thesis and bibliography working files
+.local-artifacts/
+anystyle_cleaned.bib
+coar_repository_meetings.bib
+tmp_clean_anystyle_bib.py
+
 frontend/node_modules/
 frontend/dist/

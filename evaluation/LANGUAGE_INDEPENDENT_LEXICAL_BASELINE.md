@@ -111,11 +111,11 @@ The candidate pool is the union of the first five results from exactly `language
 
 Completed grades are transferred only by exact `(query_id, publication_id)`. Blank cells remain blank; conflicts, duplicate pairs, invalid grades, old judged pairs leaving the pool, and newly unjudged pairs are all counted. No relevance is inferred. Final Precision@5, nDCG@5, and MRR@5 remain deferred until every new pooled pair is manually judged.
 
-The ignored dry-run artifact paths, hashes, transfer counts, and workbook are recorded in `.codex-tmp/handoffs/language-independent-lexical-baseline.md` after generation.
+Dry-run artifacts and the scoring workbook are retained locally and excluded from the repository. The tracked methodology and source commit provide the reproducible implementation record.
 
 ### Frozen dry-run generated on 2026-08-09
 
-The isolated dry run is `.codex-tmp/evaluation/language-independent-lexical-depth5-dry-run-20260809`. It was generated from source commit `9c7208e42a12e5a2da65eeee2802f51f5616a1c6`, which descends directly from the recorded `test` starting commit `bb88a7bdfc65139ba2465cbc47f2347257b89001`.
+The isolated dry run was generated from source commit `9c7208e42a12e5a2da65eeee2802f51f5616a1c6`, which descends directly from the recorded `test` starting commit `bb88a7bdfc65139ba2465cbc47f2347257b89001`.
 
 Protected input hashes all matched before generation and after workbook validation:
 
@@ -136,7 +136,7 @@ Generated artifact hashes:
 
 The pool contains 390 pairs. Relative to the historical raw-BM25 pool, 341 remain, 49 leave, and 49 enter. Of 253 completed judgments, 225 transfer exactly, 28 judged pairs leave the pool, the old workbook contains 137 blank rows, and the new workbook contains 165 unjudged rows. Conflicts, duplicate-pair errors, and invalid grades are all zero. These are workload/provenance counts, not effectiveness results.
 
-The validated workbook is `.codex-tmp/evaluation/language-independent-lexical-depth5-dry-run-20260809/manual-scoring/procena_relevantnosti_jezicki_nezavisna_leksicka_osnova_prosireno.xlsx`. It contains three rendered and reopened sheets, four long-abstract entries expanded across the dedicated full-text sheet, and zero detected formula errors.
+The locally retained validated workbook contains three rendered and reopened sheets, four long-abstract entries expanded across the dedicated full-text sheet, and zero detected formula errors.
 
 The non-qrels comparison retains 96 of 150 raw lexical top-five pairs and 341 of 390 full-pool pairs. Publication 4349 was inspected only after the method and run were frozen: it is outside depth five at ranks 17, 8, and 15 for q17, q19, and q20 respectively. This is post-hoc error analysis and is not a method-selection argument.
 
