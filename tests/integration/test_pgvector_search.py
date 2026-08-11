@@ -18,6 +18,42 @@ def _vector_literal(*, first: float, second: float) -> str:
     return "[" + ",".join(str(value) for value in values) + "]"
 
 
+def test_author_search_schema_safely_backfills_existing_author_rows(
+    pgvector_connection_factory: Callable[[], Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from microservices.catalog_service import main as catalog_main
+
+    connection = pgvector_connection_factory()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE TABLE author (id SERIAL PRIMARY KEY, full_name TEXT UNIQUE)")
+            cursor.execute("INSERT INTO author (full_name) VALUES (%s)", ("Ђорђе Шарић",))
+        connection.commit()
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(catalog_main, "get_connection", pgvector_connection_factory)
+    catalog_main.ensure_schema()
+
+    connection = pgvector_connection_factory()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT search_name FROM author")
+            assert cursor.fetchone()[0] == "djordje saric"
+            cursor.execute(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND indexname = 'idx_author_search_name_trgm'
+                """
+            )
+            assert "gin" in cursor.fetchone()[0].lower()
+    finally:
+        connection.close()
+
+
 def test_fetch_vector_results_uses_pgvector_and_year_filters(
     pgvector_connection_factory: Callable[[], Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -168,7 +204,16 @@ def test_structured_author_search_uses_relational_filters_and_deterministic_orde
             )
             repository_id = cursor.fetchone()[0]
             author_ids: dict[str, int] = {}
-            for name in ("Prezime, Ime", "Drugi Autor", "Đorđe Šarić"):
+            for name in (
+                "Prezime, Ime",
+                "Drugi Autor",
+                "Đorđe Šarić",
+                "Петар Петровић",
+                "Павле Петровић",
+                "Petar Petrovic",
+                "Petrović X",
+                "Deleted Petrovic",
+            ):
                 cursor.execute("INSERT INTO author (full_name) VALUES (%s) RETURNING id", (name,))
                 author_ids[name] = cursor.fetchone()[0]
 
@@ -186,6 +231,51 @@ def test_structured_author_search_uses_relational_filters_and_deterministic_orde
                 ),
                 ("null-date", "Gamma", None, True, ["Prezime, Ime"], 0.8, 0.2),
                 ("inactive", "Hidden", datetime(2025, 1, 1), False, ["Prezime, Ime"], 1.0, 0.0),
+                (
+                    "cyrillic-author",
+                    "Cyrillic author",
+                    datetime(2024, 2, 1),
+                    True,
+                    ["Петар Петровић", "Drugi Autor"],
+                    0.7,
+                    0.3,
+                ),
+                (
+                    "other-initial",
+                    "Other initial",
+                    datetime(2024, 1, 15),
+                    True,
+                    ["Павле Петровић"],
+                    0.6,
+                    0.4,
+                ),
+                (
+                    "visible-variant",
+                    "Visible repository variant",
+                    datetime(2023, 5, 1),
+                    True,
+                    ["Petar Petrovic"],
+                    0.5,
+                    0.5,
+                ),
+                (
+                    "deleted-author",
+                    "Deleted author publication",
+                    datetime(2025, 2, 1),
+                    False,
+                    ["Deleted Petrovic"],
+                    1.0,
+                    0.0,
+                ),
+                (
+                    "initial-reuse-guard",
+                    "Initial must not reuse surname",
+                    datetime(2025, 1, 10),
+                    True,
+                    ["Petrović X"],
+                    0.4,
+                    0.6,
+                ),
             ]
             publication_ids: dict[str, int] = {}
             for key, title, published_at, active, authors, first, second in publications:
@@ -232,12 +322,52 @@ def test_structured_author_search_uses_relational_filters_and_deterministic_orde
     assert [row[0] for row in surname] == [row[0] for row in exact]
     accent = search_main.fetch_author_results(10, None, None, ["Dorde Saric"])
     assert [row[0] for row in accent] == [publication_ids["accent"]]
+    cyrillic_equivalent = search_main.fetch_author_results(10, None, None, ["Ђорђе Шарић"])
+    assert [row[0] for row in cyrillic_equivalent] == [publication_ids["accent"]]
+    latin_equivalent = search_main.fetch_author_results(10, None, None, ["Petar Petrovic"])
+    assert [row[0] for row in latin_equivalent] == [
+        publication_ids["cyrillic-author"],
+        publication_ids["visible-variant"],
+    ]
+    initials = search_main.fetch_author_results(10, None, None, ["P. Petrović"])
+    assert [row[0] for row in initials] == [
+        publication_ids["cyrillic-author"],
+        publication_ids["other-initial"],
+        publication_ids["visible-variant"],
+    ]
+    assert publication_ids["initial-reuse-guard"] not in {row[0] for row in initials}
+    reversed_initial = search_main.fetch_author_results(10, None, None, ["Petrović P."])
+    assert [row[0] for row in reversed_initial] == [row[0] for row in initials]
+    short_token_is_not_a_wildcard = search_main.fetch_author_results(10, None, None, ["Pe Petrović"])
+    assert [row[0] for row in short_token_is_not_a_wildcard] == []
     multiple = search_main.fetch_author_results(10, None, None, ["Ime Prezime", "Drugi Autor"])
     assert [row[0] for row in multiple] == [publication_ids["multiple"]]
+    cyrillic_multiple = search_main.fetch_author_results(
+        10, None, None, ["Petar Petrovic", "Drugi Autor"]
+    )
+    assert [row[0] for row in cyrillic_multiple] == [publication_ids["cyrillic-author"]]
     year_filtered = search_main.fetch_author_results(10, 2024, 2024, ["Ime Prezime"])
     assert [row[0] for row in year_filtered] == [publication_ids["reversed"]]
     assert publication_ids["inactive"] not in {row[0] for row in exact}
 
     query_vector = [1.0, 0.0, *([0.0] * (VECTOR_DIMENSIONS - 2))]
     hybrid = search_main.fetch_vector_results(query_vector, 10, None, None, ["Drugi Autor"])
-    assert [row[0] for row in hybrid] == [publication_ids["multiple"]]
+    assert [row[0] for row in hybrid] == [
+        publication_ids["multiple"],
+        publication_ids["cyrillic-author"],
+    ]
+
+    selected = search_main.fetch_author_results(
+        10, None, None, [], [author_ids["Petar Petrovic"]]
+    )
+    assert [row[0] for row in selected] == [publication_ids["visible-variant"]]
+
+    suggestions = search_main.fetch_author_suggestions("Petar Petrovci", 10)
+    assert [(item["id"], item["display_name"], item["publication_count"]) for item in suggestions] == [
+        (author_ids["Petar Petrovic"], "Petar Petrovic", 1),
+        (author_ids["Петар Петровић"], "Петар Петровић", 1),
+        (author_ids["Павле Петровић"], "Павле Петровић", 1),
+        (author_ids["Petrović X"], "Petrović X", 1),
+    ]
+    assert search_main.fetch_author_suggestions("Petar Petrovci", 1) == [suggestions[0]]
+    assert all(item["id"] != author_ids["Deleted Petrovic"] for item in suggestions)

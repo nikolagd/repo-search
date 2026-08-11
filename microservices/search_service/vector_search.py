@@ -1,19 +1,12 @@
 from __future__ import annotations
 
-import re
-import unicodedata
 from typing import Any
 
-
-AUTHOR_TRANSLATE_SOURCE = "čćžšđ"
-AUTHOR_TRANSLATE_TARGET = "cczsd"
+from microservices.common.author_names import canonicalize_author_name, parse_author_query
 
 
 def normalize_author_tokens(author_name: str) -> list[str]:
-    normalized = unicodedata.normalize("NFKD", author_name.casefold())
-    normalized = "".join(character for character in normalized if not unicodedata.combining(character))
-    normalized = normalized.translate(str.maketrans({"đ": "d"}))
-    return re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
+    return canonicalize_author_name(author_name).split()
 
 
 def _append_author_filters(
@@ -21,38 +14,34 @@ def _append_author_filters(
     params: list[Any],
     author_names: list[str],
     publication_alias: str,
+    author_ids: list[int] | None = None,
 ) -> str:
     for author_name in author_names:
-        tokens = normalize_author_tokens(author_name)
-        if not tokens:
-            raise ValueError("author filters must contain at least one searchable token")
+        query = parse_author_query(author_name)
         sql += f"""
               AND EXISTS (
                   SELECT 1
                   FROM publication_author author_pa
                   JOIN author author_row ON author_row.id = author_pa.author_id
                   WHERE author_pa.publication_id = {publication_alias}.id
-                    AND (
-                        SELECT bool_and(
-                            filter_token = ANY(
-                                regexp_split_to_array(
-                                    trim(
-                                        regexp_replace(
-                                            translate(lower(author_row.full_name),
-                                                      '{AUTHOR_TRANSLATE_SOURCE}',
-                                                      '{AUTHOR_TRANSLATE_TARGET}'),
-                                            '[^[:alnum:]]+', ' ', 'g'
-                                        )
-                                    ),
-                                    '\\s+'
-                                )
-                            )
-                        )
-                        FROM unnest(%s::text[]) AS filter_token
+                    AND public.repo_search_author_matches(
+                        author_row.full_name,
+                        %s::text[],
+                        %s::boolean[]
                     )
               )
         """
-        params.append(tokens)
+        params.extend((list(query.tokens), list(query.initials)))
+    for author_id in author_ids or []:
+        sql += f"""
+              AND EXISTS (
+                  SELECT 1
+                  FROM publication_author selected_author_pa
+                  WHERE selected_author_pa.publication_id = {publication_alias}.id
+                    AND selected_author_pa.author_id = %s
+              )
+        """
+        params.append(author_id)
     return sql
 
 
@@ -82,12 +71,13 @@ def execute_vector_search(
     year_from: int | None,
     year_to: int | None,
     author_names: list[str] | None = None,
+    author_ids: list[int] | None = None,
     *,
     deterministic_ties: bool = False,
 ) -> list[tuple[Any, ...]]:
     ranked_order = "cosine_distance ASC, id ASC" if deterministic_ties else "cosine_distance ASC"
     final_order = "ranked.cosine_distance ASC, ranked.id ASC" if deterministic_ties else "ranked.cosine_distance ASC"
-    if not author_names:
+    if not author_names and not author_ids:
         sql = """
             WITH ranked AS (
                 SELECT id, repository_id, title, abstract, source_url, date,
@@ -129,7 +119,7 @@ def execute_vector_search(
     if year_to is not None:
         sql += " AND p.date <= %s"
         params.append(f"{year_to}-12-31")
-    sql = _append_author_filters(sql, params, author_names, "p")
+    sql = _append_author_filters(sql, params, author_names or [], "p", author_ids)
 
     sql += f"""
         ), ranked AS (
@@ -153,8 +143,9 @@ def execute_author_search(
     year_from: int | None,
     year_to: int | None,
     author_names: list[str],
+    author_ids: list[int] | None = None,
 ) -> list[tuple[Any, ...]]:
-    if not author_names:
+    if not author_names and not author_ids:
         raise ValueError("author-only search requires at least one author filter")
     sql = """
         WITH ranked AS (
@@ -170,7 +161,7 @@ def execute_author_search(
     if year_to is not None:
         sql += " AND p.date <= %s"
         params.append(f"{year_to}-12-31")
-    sql = _append_author_filters(sql, params, author_names, "p")
+    sql = _append_author_filters(sql, params, author_names, "p", author_ids)
     sql += """
             ORDER BY p.date DESC NULLS LAST, lower(COALESCE(p.title, '')) ASC, p.id ASC
             LIMIT %s

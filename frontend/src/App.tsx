@@ -9,12 +9,12 @@ import ResultsPanel from "./components/ResultsPanel";
 import SearchPanel from "./components/SearchPanel";
 import Topbar from "./components/Topbar";
 import { EXAMPLE_QUERIES } from "./constants/searchExamples";
-import type { HealthResponse, RepositoryResponse, SearchResponse, StatsResponse } from "./types";
+import type { AuthorFilter, HealthResponse, RepositoryResponse, SearchResponse, StatsResponse } from "./types";
 
 export default function App() {
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
   const [limit, setLimit] = useState(10);
-  const [authorNames, setAuthorNames] = useState<string[]>([]);
+  const [authorFilters, setAuthorFilters] = useState<AuthorFilter[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [repositories, setRepositories] = useState<RepositoryResponse[]>([]);
@@ -77,7 +77,12 @@ export default function App() {
     try {
       const payload = await fetchJson<SearchResponse>("/api/search", {
         method: "POST",
-        body: JSON.stringify({ query, author_names: authorNames, limit }),
+        body: JSON.stringify({
+          query,
+          author_names: authorFilters.filter((author) => author.id === null).map((author) => author.display_name),
+          author_ids: authorFilters.flatMap((author) => author.id === null ? [] : [author.id]),
+          limit,
+        }),
       });
       setSearchPayload(payload);
     } catch (err) {
@@ -92,11 +97,11 @@ export default function App() {
     <section className="workspace">
       <SearchPanel
         examples={EXAMPLE_QUERIES}
-        authorNames={authorNames}
+        authorFilters={authorFilters}
         limit={limit}
         loading={loading}
         onLimitChange={setLimit}
-        onAuthorNamesChange={setAuthorNames}
+        onAuthorFiltersChange={setAuthorFilters}
         onQueryChange={setQuery}
         onSubmit={submitSearch}
         query={query}

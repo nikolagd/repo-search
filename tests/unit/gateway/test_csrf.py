@@ -87,3 +87,23 @@ def test_public_read_only_route_is_unaffected_by_admin_csrf(monkeypatch: pytest.
 
     assert response.status_code == 200
     assert response.json() == {"path": "/repositories"}
+
+
+def test_author_suggestion_route_proxies_to_search_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_proxy(request, base_url, path):
+        return JSONResponse({"base_url": base_url, "path": path, "query": request.url.query})
+
+    monkeypatch.setattr(gateway, "proxy_request", fake_proxy)
+    gateway.app.dependency_overrides[require_api_token] = lambda: None
+    try:
+        with TestClient(gateway.app) as client:
+            response = client.get("/api/authors/suggestions?q=Petrovci&limit=5")
+    finally:
+        gateway.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "base_url": gateway.SEARCH_SERVICE_URL,
+        "path": "/authors/suggestions",
+        "query": "q=Petrovci&limit=5",
+    }

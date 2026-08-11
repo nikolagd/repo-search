@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from microservices.common.author_names import parse_author_query
+
 
 FILLERS = [
     "radovi o",
@@ -30,9 +32,6 @@ AUTHOR_PATTERNS = [
     ),
     re.compile(r"^papers\s+by\s+(.+?)(?:\s+(?:about|on)\s+(.+))?$", re.IGNORECASE),
 ]
-AUTHOR_TOKEN_PATTERN = re.compile(r"[^\W\d_]+(?:[.'’-][^\W\d_]+)*", re.UNICODE)
-
-
 def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -40,12 +39,16 @@ def normalize_text(text: str) -> str:
 
 def _valid_author_name(value: str) -> str | None:
     name = normalize_text(value.strip(" ,;:"))
-    tokens = AUTHOR_TOKEN_PATTERN.findall(name)
-    if not (1 <= len(tokens) <= 6) or " ".join(tokens).casefold() != re.sub(
-        r"[,\s]+", " ", name
-    ).strip().casefold():
+    if not name or len(name) > 200 or any(
+        not (character.isalpha() or character.isspace() or character in ",.'’-−-")
+        for character in name
+    ):
         return None
-    return name if len(name) <= 200 else None
+    try:
+        parse_author_query(name)
+    except ValueError:
+        return None
+    return name
 
 
 def extract_author_constraints(text: str) -> dict:

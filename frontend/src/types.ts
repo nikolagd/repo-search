@@ -30,6 +30,7 @@ export interface SearchPlan {
   embedding_queries: string[];
   semantic_query: string;
   author_names: string[];
+  author_ids: number[];
   search_mode: "semantic" | "author" | "hybrid";
   topic_phrases: string[];
   year_from: number | null;
@@ -37,6 +38,21 @@ export interface SearchPlan {
   ranking_phrases: string[];
   interpreted_query: string;
   used_fallback: boolean;
+}
+
+export interface AuthorSuggestion {
+  id: number;
+  display_name: string;
+  publication_count: number;
+}
+
+export interface AuthorSuggestionsResponse {
+  suggestions: AuthorSuggestion[];
+}
+
+export interface AuthorFilter {
+  id: number | null;
+  display_name: string;
 }
 
 export interface SearchResult {

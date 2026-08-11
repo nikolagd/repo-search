@@ -61,6 +61,7 @@ def test_explicit_author_precedence_deduplicates_reversed_parser_name() -> None:
     assert search_main.merge_author_names(
         ["Ime Prezime"], ["Prezime, Ime", "Drugi Autor"]
     ) == ["Ime Prezime", "Drugi Autor"]
+    assert search_main.merge_author_names([], ["P. P.", "P. Petrović"]) == ["P. Petrović"]
 
 
 def test_search_merges_candidates_and_ranks_with_all_boosts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,6 +240,30 @@ def test_explicit_author_only_search_never_parses_or_embeds(monkeypatch: pytest.
     assert response["results"][0]["cosine_similarity"] is None
     assert response["results"][0]["matched_query"] is None
     assert recorded == {"result_count": 1, "search_mode": "author", "author_filter_count": 1}
+    parse_mock.assert_not_awaited()
+    embed_mock.assert_not_awaited()
+
+
+def test_selected_author_id_search_never_parses_or_embeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    _isolate_search_boundaries(monkeypatch)
+    parse_mock = AsyncMock(side_effect=AssertionError("query parser must not be called"))
+    embed_mock = AsyncMock(side_effect=AssertionError("embedding must not be called"))
+    monkeypatch.setattr(search_main, "parse_search_query", parse_mock)
+    monkeypatch.setattr(search_main, "embed_query", embed_mock)
+    calls = []
+
+    def fetch(limit, year_from, year_to, author_names, author_ids):
+        calls.append((limit, year_from, year_to, author_names, author_ids))
+        return []
+
+    monkeypatch.setattr(search_main, "fetch_author_results", fetch)
+    monkeypatch.setattr(search_main, "record_retrieval_search", lambda *_args, **_kwargs: None)
+
+    response = asyncio.run(search_main.search(SearchRequest(author_ids=[42], limit=5)))
+
+    assert response["search_mode"] == "author"
+    assert response["plan"]["author_ids"] == [42]
+    assert calls == [(5, None, None, [], [42])]
     parse_mock.assert_not_awaited()
     embed_mock.assert_not_awaited()
 

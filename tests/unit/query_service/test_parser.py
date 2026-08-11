@@ -79,6 +79,7 @@ def test_fallback_parser_preserves_original_query_when_only_a_filler_remains() -
     ("query", "authors", "embedding_queries", "search_mode"),
     [
         ("autor: Ime Prezime", ["Ime Prezime"], [], "author"),
+        ("autor: P. Petrović", ["P. Petrović"], [], "author"),
         ("radovi autora Ime Prezime", ["Ime Prezime"], [], "author"),
         ("publikacije autora Ime Prezime", ["Ime Prezime"], [], "author"),
         ("papers by Jane Doe", ["Jane Doe"], [], "author"),

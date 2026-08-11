@@ -7,10 +7,16 @@ from datetime import date, datetime
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from microservices.common.app_logging import app_observability_log_query_text, emit_app_event
+from microservices.common.author_names import (
+    AUTHOR_SEARCH_SCHEMA_SQL,
+    author_name_key,
+    canonicalize_author_name,
+    rank_author_suggestions,
+)
 from microservices.common.config import service_url
 from microservices.common.db import get_connection
 from microservices.common.embedding_provenance import (
@@ -49,7 +55,7 @@ from microservices.common.schemas import (
 from microservices.common.security import internal_headers, require_api_token
 from microservices.query_service.parser import parse_query_fallback
 from microservices.query_service.query_handler import derive_search_mode, sanitize_topic_text
-from microservices.search_service.vector_search import execute_author_search, execute_vector_search, normalize_author_tokens
+from microservices.search_service.vector_search import execute_author_search, execute_vector_search
 
 QUERY_SERVICE_URL = service_url("QUERY_SERVICE_URL", "http://query-service:8000")
 EMBEDDING_SERVICE_URL = service_url("EMBEDDING_SERVICE_URL", "http://embedding-service:8000")
@@ -177,6 +183,7 @@ def ensure_schema() -> None:
                     ON publication USING ivfflat (embedding vector_cosine_ops);
                 """
             )
+            cur.execute(AUTHOR_SEARCH_SCHEMA_SQL)
         conn.commit()
     finally:
         conn.close()
@@ -278,10 +285,12 @@ def merge_author_names(explicit: list[str], extracted: list[str] | None) -> list
         if not isinstance(candidate, str):
             continue
         name = " ".join(candidate.split())
-        tokens = normalize_author_tokens(name)
-        if not name or len(name) > 200 or not (1 <= len(tokens) <= 6):
+        if not name or len(name) > 200:
             continue
-        key = tuple(sorted(tokens))
+        try:
+            key = author_name_key(name)
+        except ValueError:
+            continue
         if key not in seen:
             seen.add(key)
             merged.append(name)
@@ -290,7 +299,11 @@ def merge_author_names(explicit: list[str], extracted: list[str] | None) -> list
     return merged
 
 
-def finalize_search_plan(parsed: dict, explicit_authors: list[str]) -> dict:
+def finalize_search_plan(
+    parsed: dict,
+    explicit_authors: list[str],
+    explicit_author_ids: list[int] | None = None,
+) -> dict:
     plan = dict(parsed)
     author_names = merge_author_names(explicit_authors, plan.get("author_names"))
     embedding_queries = []
@@ -301,6 +314,7 @@ def finalize_search_plan(parsed: dict, explicit_authors: list[str]) -> dict:
     plan["embedding_queries"] = embedding_queries
     plan["semantic_query"] = embedding_queries[0] if embedding_queries else ""
     plan["author_names"] = author_names
+    plan["author_ids"] = list(explicit_author_ids or [])
     plan["topic_phrases"] = [
         clean
         for item in plan.get("topic_phrases") or []
@@ -311,7 +325,10 @@ def finalize_search_plan(parsed: dict, explicit_authors: list[str]) -> dict:
         for item in plan.get("ranking_phrases") or []
         if isinstance(item, str) and (clean := sanitize_topic_text(item, author_names))
     ]
-    plan["search_mode"] = derive_search_mode(embedding_queries, author_names)
+    plan["search_mode"] = derive_search_mode(
+        embedding_queries,
+        author_names or (["selected-author"] if explicit_author_ids else []),
+    )
     return plan
 
 
@@ -321,6 +338,7 @@ def fetch_vector_results(
     year_from: int | None,
     year_to: int | None,
     author_names: list[str] | None = None,
+    author_ids: list[int] | None = None,
 ) -> list[tuple[Any, ...]]:
     with observe_retrieval_stage(
         "search-service",
@@ -329,12 +347,20 @@ def fetch_vector_results(
             "repo_search.candidate_limit": limit,
             "repo_search.year_from": year_from,
             "repo_search.year_to": year_to,
-            "repo_search.author_filter_count": len(author_names or []),
+            "repo_search.author_filter_count": len(author_names or []) + len(author_ids or []),
         },
     ) as span:
         conn = get_connection()
         try:
-            rows = execute_vector_search(conn, query_vector, limit, year_from, year_to, author_names)
+            rows = execute_vector_search(
+                conn,
+                query_vector,
+                limit,
+                year_from,
+                year_to,
+                author_names,
+                author_ids,
+            )
             if span is not None:
                 span.set_attribute("repo_search.result_candidates", len(rows))
             return rows
@@ -347,6 +373,7 @@ def fetch_author_results(
     year_from: int | None,
     year_to: int | None,
     author_names: list[str],
+    author_ids: list[int] | None = None,
 ) -> list[tuple[Any, ...]]:
     with observe_retrieval_stage(
         "search-service",
@@ -355,17 +382,74 @@ def fetch_author_results(
             "repo_search.candidate_limit": limit,
             "repo_search.year_from": year_from,
             "repo_search.year_to": year_to,
-            "repo_search.author_filter_count": len(author_names),
+            "repo_search.author_filter_count": len(author_names) + len(author_ids or []),
         },
     ) as span:
         conn = get_connection()
         try:
-            rows = execute_author_search(conn, limit, year_from, year_to, author_names)
+            rows = execute_author_search(conn, limit, year_from, year_to, author_names, author_ids)
             if span is not None:
                 span.set_attribute("repo_search.result_candidates", len(rows))
             return rows
         finally:
             conn.close()
+
+
+def fetch_author_suggestions(query: str, limit: int) -> list[dict[str, Any]]:
+    canonical_query = canonicalize_author_name(query)
+    if len(canonical_query.replace(" ", "")) < 2:
+        raise HTTPException(status_code=422, detail="Author suggestion query must contain at least two letters.")
+    longest_token = max(canonical_query.split(), key=len)
+    candidate_limit = min(200, max(50, limit * 10))
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT a.id, a.full_name, COUNT(DISTINCT pa.publication_id) AS publication_count
+                FROM author a
+                JOIN publication_author pa ON pa.author_id = a.id
+                JOIN publication p ON p.id = pa.publication_id AND p.is_active = TRUE
+                WHERE a.search_name %% %s
+                   OR a.search_name %% %s
+                   OR a.search_name LIKE %s
+                GROUP BY a.id, a.full_name, a.search_name
+                ORDER BY GREATEST(
+                    similarity(a.search_name, %s),
+                    similarity(a.search_name, %s)
+                ) DESC,
+                lower(a.full_name) ASC,
+                a.id ASC
+                LIMIT %s
+                """,
+                (
+                    canonical_query,
+                    longest_token,
+                    f"%{longest_token}%",
+                    canonical_query,
+                    longest_token,
+                    candidate_limit,
+                ),
+            )
+            candidates = [
+                {
+                    "id": row[0],
+                    "display_name": row[1],
+                    "publication_count": int(row[2]),
+                }
+                for row in cursor.fetchall()
+            ]
+    finally:
+        connection.close()
+    return rank_author_suggestions(canonical_query, candidates, limit)
+
+
+@app.get("/authors/suggestions", dependencies=[Depends(require_api_token)])
+def author_suggestions(
+    q: str = Query(min_length=2, max_length=200),
+    limit: int = Query(default=8, ge=1, le=20),
+) -> dict[str, Any]:
+    return {"suggestions": fetch_author_suggestions(q, limit)}
 
 
 def load_index_status() -> dict[str, Any]:
@@ -491,26 +575,35 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                     "ranking_phrases": [],
                     "year_from": None,
                     "year_to": None,
-                    "interpreted_query": f"Author filters: {', '.join(request.author_names)}",
+                    "interpreted_query": (
+                        f"Author filters: {', '.join(request.author_names)}"
+                        if request.author_names
+                        else f"Selected author IDs: {', '.join(map(str, request.author_ids))}"
+                    ),
                     "used_fallback": False,
                     "parser_mode": parser_mode,
                 }
                 record_retrieval_parser_event("search-service", parser_mode)
 
-            parsed = finalize_search_plan(parsed, request.author_names)
-            if not parsed["embedding_queries"] and not parsed["author_names"]:
-                parsed = finalize_search_plan(parse_query_fallback(query), request.author_names)
+            parsed = finalize_search_plan(parsed, request.author_names, request.author_ids)
+            if not parsed["embedding_queries"] and not parsed["author_names"] and not parsed["author_ids"]:
+                parsed = finalize_search_plan(
+                    parse_query_fallback(query),
+                    request.author_names,
+                    request.author_ids,
+                )
                 parser_mode = normalize_parser_mode(
                     parsed.get("parser_mode"), bool(parsed.get("used_fallback"))
                 )
 
             embedding_queries = parsed["embedding_queries"]
             author_names = parsed["author_names"]
+            author_ids = parsed["author_ids"]
             search_mode = parsed["search_mode"]
             if span is not None:
                 span.set_attribute("repo_search.embedding_query_count", len(embedding_queries))
                 span.set_attribute("repo_search.search_mode", search_mode)
-                span.set_attribute("repo_search.author_filter_count", len(author_names))
+                span.set_attribute("repo_search.author_filter_count", len(author_names) + len(author_ids))
                 span.set_attribute("repo_search.used_fallback", bool(parsed.get("used_fallback")))
                 span.set_attribute("repo_search.parser_mode", parser_mode)
             candidate_limit = max(request.limit, request.limit * CANDIDATE_MULTIPLIER)
@@ -518,11 +611,16 @@ async def search(request: SearchRequest) -> dict[str, Any]:
             vector_candidate_count = 0
 
             if search_mode == "author":
-                rows = fetch_author_results(
+                author_args = (
                     request.limit,
                     parsed["year_from"],
                     parsed["year_to"],
                     author_names,
+                )
+                rows = (
+                    fetch_author_results(*author_args, author_ids)
+                    if author_ids
+                    else fetch_author_results(*author_args)
                 )
                 for rank, row in enumerate(rows, start=1):
                     merged[row[0]] = {
@@ -553,11 +651,12 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                         parsed["year_from"],
                         parsed["year_to"],
                     )
-                    rows = (
-                        fetch_vector_results(*fetch_args, author_names)
-                        if author_names
-                        else fetch_vector_results(*fetch_args)
-                    )
+                    if author_ids:
+                        rows = fetch_vector_results(*fetch_args, author_names, author_ids)
+                    elif author_names:
+                        rows = fetch_vector_results(*fetch_args, author_names)
+                    else:
+                        rows = fetch_vector_results(*fetch_args)
                     vector_candidate_count += len(rows)
 
                     for rank, row in enumerate(rows, start=1):
@@ -628,7 +727,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                 result_scores,
                 result_count=len(results),
                 search_mode=search_mode,
-                author_filter_count=len(author_names),
+                author_filter_count=len(author_names) + len(author_ids),
             )
             top_score = max(result_scores) if result_scores else None
             average_score = sum(result_scores) / len(result_scores) if result_scores else None
@@ -637,7 +736,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                 "parser_mode": parser_mode,
                 "embedding_query_count": len(embedding_queries),
                 "search_mode": search_mode,
-                "author_filter_count": len(author_names),
+                "author_filter_count": len(author_names) + len(author_ids),
                 "vector_candidate_count": vector_candidate_count,
                 "result_count": len(results),
                 "top_score": top_score,

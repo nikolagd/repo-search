@@ -269,6 +269,47 @@ input:focus {
   color: #0f766e;
 }
 
+.author-suggestions {
+  display: grid;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.author-suggestions button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid #eef1f5;
+  background: #ffffff;
+  color: #344054;
+  text-align: left;
+}
+
+.author-suggestions button:last-child {
+  border-bottom: 0;
+}
+
+.author-suggestions button:hover {
+  background: #f0fdfa;
+}
+
+.author-suggestions small,
+.author-suggestion-status,
+.author-help {
+  color: #667085;
+  font-size: 0.78rem;
+}
+
+.author-suggestion-status {
+  padding: 9px 10px;
+}
+
 .author-chips {
   display: flex;
   flex-wrap: wrap;
