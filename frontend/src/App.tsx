@@ -117,9 +117,6 @@ export default function App() {
     requestGeneration.current += 1;
     setLoading(false);
     setQuery(nextQuery);
-    setAuthorFilters((current) => current.filter((author) => author.source === "manual"));
-    setSearchPayload(null);
-    if (authorMatchOverride === null) setAuthorMatch("any");
   }
 
   function handleAuthorFiltersChange(authors: AuthorFilter[]) {
