@@ -336,6 +336,38 @@ input:focus {
   color: inherit;
 }
 
+.author-chip small {
+  color: #667085;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.author-match {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.author-match button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #667085;
+  padding: 0.38rem 0.65rem;
+}
+
+.author-match button + button {
+  border-left: 1px solid #dce2ea;
+}
+
+.author-match button.active {
+  background: #e6f4f1;
+  color: #0f766e;
+}
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 90px;

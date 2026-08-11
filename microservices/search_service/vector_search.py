@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from microservices.common.author_names import canonicalize_author_name, parse_author_query
+from microservices.common.schemas import AuthorMatch
 
 
 def normalize_author_tokens(author_name: str) -> list[str]:
@@ -15,7 +16,34 @@ def _append_author_filters(
     author_names: list[str],
     publication_alias: str,
     author_ids: list[int] | None = None,
+    author_match: AuthorMatch = "any",
 ) -> str:
+    if author_match not in {"any", "all"}:
+        raise ValueError("author_match must be either 'any' or 'all'")
+
+    if author_match == "any":
+        conditions: list[str] = []
+        for author_name in author_names:
+            query = parse_author_query(author_name)
+            conditions.append(
+                "public.repo_search_author_matches(any_author_row.full_name, %s::text[], %s::boolean[])"
+            )
+            params.extend((list(query.tokens), list(query.initials)))
+        for author_id in author_ids or []:
+            conditions.append("any_author_pa.author_id = %s")
+            params.append(author_id)
+        if conditions:
+            sql += f"""
+              AND EXISTS (
+                  SELECT 1
+                  FROM publication_author any_author_pa
+                  JOIN author any_author_row ON any_author_row.id = any_author_pa.author_id
+                  WHERE any_author_pa.publication_id = {publication_alias}.id
+                    AND ({' OR '.join(conditions)})
+              )
+            """
+        return sql
+
     for author_name in author_names:
         query = parse_author_query(author_name)
         sql += f"""
@@ -72,6 +100,7 @@ def execute_vector_search(
     year_to: int | None,
     author_names: list[str] | None = None,
     author_ids: list[int] | None = None,
+    author_match: AuthorMatch = "any",
     *,
     deterministic_ties: bool = False,
 ) -> list[tuple[Any, ...]]:
@@ -119,7 +148,7 @@ def execute_vector_search(
     if year_to is not None:
         sql += " AND p.date <= %s"
         params.append(f"{year_to}-12-31")
-    sql = _append_author_filters(sql, params, author_names or [], "p", author_ids)
+    sql = _append_author_filters(sql, params, author_names or [], "p", author_ids, author_match)
 
     sql += f"""
         ), ranked AS (
@@ -144,6 +173,7 @@ def execute_author_search(
     year_to: int | None,
     author_names: list[str],
     author_ids: list[int] | None = None,
+    author_match: AuthorMatch = "any",
 ) -> list[tuple[Any, ...]]:
     if not author_names and not author_ids:
         raise ValueError("author-only search requires at least one author filter")
@@ -161,7 +191,7 @@ def execute_author_search(
     if year_to is not None:
         sql += " AND p.date <= %s"
         params.append(f"{year_to}-12-31")
-    sql = _append_author_filters(sql, params, author_names, "p", author_ids)
+    sql = _append_author_filters(sql, params, author_names, "p", author_ids, author_match)
     sql += """
             ORDER BY p.date DESC NULLS LAST, lower(COALESCE(p.title, '')) ASC, p.id ASC
             LIMIT %s

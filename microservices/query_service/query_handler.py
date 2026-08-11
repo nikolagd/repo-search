@@ -91,6 +91,9 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
         return None, "LLM response is not a JSON object."
 
     author_names = clean_author_names(raw.get("author_names"))
+    author_match = raw.get("author_match", "any")
+    if author_match not in {"any", "all"}:
+        return None, 'author_match must be either "any" or "all".'
     embedding_queries = [
         clean
         for item in clean_string_list(raw.get("embedding_queries"))
@@ -123,6 +126,7 @@ def normalize_plan(raw: dict | None, original_query: str) -> tuple[dict | None, 
         "embedding_queries": embedding_queries,
         "semantic_query": embedding_queries[0] if embedding_queries else "",
         "author_names": author_names,
+        "author_match": author_match,
         "search_mode": derive_search_mode(embedding_queries, author_names),
         "topic_phrases": [
             clean

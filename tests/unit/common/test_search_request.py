@@ -46,3 +46,12 @@ def test_search_request_accepts_deduplicates_and_validates_selected_author_ids()
 def test_search_request_rejects_initial_only_author_filters() -> None:
     with pytest.raises(ValidationError, match="full surname"):
         SearchRequest(author_names=["P. P."])
+
+
+def test_search_request_distinguishes_optional_author_match_override() -> None:
+    assert SearchRequest(query="topic").author_match is None
+    assert SearchRequest(query="topic", author_match="any").author_match == "any"
+    assert SearchRequest(query="topic", author_match="all").author_match == "all"
+
+    with pytest.raises(ValidationError, match="any.*all"):
+        SearchRequest(query="topic", author_match="both")  # type: ignore[arg-type]

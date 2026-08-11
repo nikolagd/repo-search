@@ -26,11 +26,45 @@ YEAR_PATTERNS = [
 ]
 
 AUTHOR_PATTERNS = [
-    re.compile(
-        r"^(?:radovi|publikacije)\s+autora\s+(.+?)(?:\s+(?:o|na\s+temu)\s+(.+))?$",
-        re.IGNORECASE,
+    (
+        re.compile(
+            r"^zajedni(?:\u010d|c)ki\s+(?:radovi|publikacije)(?:\s+autora)?\s+(.+?)(?:\s+(?:o|na\s+temu)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        "all",
     ),
-    re.compile(r"^papers\s+by\s+(.+?)(?:\s+(?:about|on)\s+(.+))?$", re.IGNORECASE),
+    (
+        re.compile(
+            r"^koautorski\s+(?:radovi|publikacije)(?:\s+autora)?\s+(.+?)(?:\s+(?:o|na\s+temu)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        "all",
+    ),
+    (
+        re.compile(
+            r"^(?:radovi|publikacije)\s+oba\s+autora\s+(.+?)(?:\s+(?:o|na\s+temu)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        "all",
+    ),
+    (
+        re.compile(
+            r"^(?:radovi|publikacije)\s+autora\s+(.+?)(?:\s+(?:o|na\s+temu)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        "any",
+    ),
+    (
+        re.compile(
+            r"^papers\s+(?:coauthored\s+by|written\s+by\s+both)\s+(.+?)(?:\s+(?:about|on)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        "all",
+    ),
+    (
+        re.compile(r"^papers\s+by\s+(.+?)(?:\s+(?:about|on)\s+(.+))?$", re.IGNORECASE),
+        "any",
+    ),
 ]
 def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
@@ -51,6 +85,19 @@ def _valid_author_name(value: str) -> str | None:
     return name
 
 
+def _valid_author_list(value: str) -> list[str]:
+    """Parse only explicitly marked names joined by Serbian/English AND/OR.
+
+    The grammar deliberately requires every segment to pass the existing author
+    validator; arbitrary unmarked capitalized text is never split into authors.
+    """
+    parts = re.split(r"\s+(?:i|ili|and|or)\s+", value, flags=re.IGNORECASE)
+    names = [_valid_author_name(part) for part in parts]
+    if not names or any(name is None for name in names):
+        return []
+    return list(dict.fromkeys(name for name in names if name is not None))
+
+
 def extract_author_constraints(text: str) -> dict:
     clean = normalize_text(text)
     explicit = re.search(r"(?:^|\s)autor\s*:\s*(.+?)(?:\s*;\s*(.*)|$)", clean, re.IGNORECASE)
@@ -59,20 +106,25 @@ def extract_author_constraints(text: str) -> dict:
         if name:
             before = clean[: explicit.start()].strip()
             after = (explicit.group(2) or "").strip()
-            return {"clean_query": normalize_text(f"{before} {after}"), "author_names": [name]}
+            return {
+                "clean_query": normalize_text(f"{before} {after}"),
+                "author_names": [name],
+                "author_match": "any",
+            }
 
-    for pattern in AUTHOR_PATTERNS:
+    for pattern, author_match in AUTHOR_PATTERNS:
         match = pattern.fullmatch(clean)
         if not match:
             continue
-        name = _valid_author_name(match.group(1))
-        if name:
+        names = _valid_author_list(match.group(1))
+        if names:
             return {
                 "clean_query": normalize_text(match.group(2) or ""),
-                "author_names": [name],
+                "author_names": names,
+                "author_match": author_match,
             }
 
-    return {"clean_query": clean, "author_names": []}
+    return {"clean_query": clean, "author_names": [], "author_match": "any"}
 
 
 def remove_fillers(text: str) -> str:
@@ -147,6 +199,7 @@ def parse_query_fallback(query: str) -> dict:
         "embedding_queries": embedding_queries,
         "semantic_query": semantic_query,
         "author_names": parsed_authors["author_names"],
+        "author_match": parsed_authors["author_match"],
         "search_mode": "hybrid" if embedding_queries and parsed_authors["author_names"] else (
             "author" if parsed_authors["author_names"] else "semantic"
         ),

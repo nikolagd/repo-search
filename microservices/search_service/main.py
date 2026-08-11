@@ -47,6 +47,7 @@ from microservices.common.observability import (
 )
 from microservices.common.schemas import (
     MAX_AUTHOR_FILTERS,
+    AuthorMatch,
     HealthResponse,
     LivenessResponse,
     ReadinessResponse,
@@ -303,9 +304,15 @@ def finalize_search_plan(
     parsed: dict,
     explicit_authors: list[str],
     explicit_author_ids: list[int] | None = None,
+    explicit_author_match: AuthorMatch | None = None,
 ) -> dict:
     plan = dict(parsed)
-    author_names = merge_author_names(explicit_authors, plan.get("author_names"))
+    validated_extracted = merge_author_names([], plan.get("author_names"))
+    explicit_keys = {author_name_key(name) for name in explicit_authors}
+    extracted_author_names = [
+        name for name in validated_extracted if author_name_key(name) not in explicit_keys
+    ]
+    author_names = merge_author_names(explicit_authors, validated_extracted)
     embedding_queries = []
     for item in plan.get("embedding_queries") or []:
         if isinstance(item, str) and (clean := sanitize_topic_text(item, author_names)):
@@ -315,6 +322,11 @@ def finalize_search_plan(
     plan["semantic_query"] = embedding_queries[0] if embedding_queries else ""
     plan["author_names"] = author_names
     plan["author_ids"] = list(explicit_author_ids or [])
+    plan["extracted_author_names"] = extracted_author_names
+    parser_author_match = plan.get("author_match")
+    if parser_author_match not in {"any", "all"}:
+        parser_author_match = "any"
+    plan["author_match"] = explicit_author_match or parser_author_match
     plan["topic_phrases"] = [
         clean
         for item in plan.get("topic_phrases") or []
@@ -339,6 +351,7 @@ def fetch_vector_results(
     year_to: int | None,
     author_names: list[str] | None = None,
     author_ids: list[int] | None = None,
+    author_match: AuthorMatch = "any",
 ) -> list[tuple[Any, ...]]:
     with observe_retrieval_stage(
         "search-service",
@@ -360,6 +373,7 @@ def fetch_vector_results(
                 year_to,
                 author_names,
                 author_ids,
+                author_match,
             )
             if span is not None:
                 span.set_attribute("repo_search.result_candidates", len(rows))
@@ -374,6 +388,7 @@ def fetch_author_results(
     year_to: int | None,
     author_names: list[str],
     author_ids: list[int] | None = None,
+    author_match: AuthorMatch = "any",
 ) -> list[tuple[Any, ...]]:
     with observe_retrieval_stage(
         "search-service",
@@ -387,7 +402,9 @@ def fetch_author_results(
     ) as span:
         conn = get_connection()
         try:
-            rows = execute_author_search(conn, limit, year_from, year_to, author_names, author_ids)
+            rows = execute_author_search(
+                conn, limit, year_from, year_to, author_names, author_ids, author_match
+            )
             if span is not None:
                 span.set_attribute("repo_search.result_candidates", len(rows))
             return rows
@@ -571,6 +588,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                 parsed = {
                     "embedding_queries": [],
                     "author_names": [],
+                    "author_match": "any",
                     "topic_phrases": [],
                     "ranking_phrases": [],
                     "year_from": None,
@@ -585,12 +603,15 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                 }
                 record_retrieval_parser_event("search-service", parser_mode)
 
-            parsed = finalize_search_plan(parsed, request.author_names, request.author_ids)
+            parsed = finalize_search_plan(
+                parsed, request.author_names, request.author_ids, request.author_match
+            )
             if not parsed["embedding_queries"] and not parsed["author_names"] and not parsed["author_ids"]:
                 parsed = finalize_search_plan(
                     parse_query_fallback(query),
                     request.author_names,
                     request.author_ids,
+                    request.author_match,
                 )
                 parser_mode = normalize_parser_mode(
                     parsed.get("parser_mode"), bool(parsed.get("used_fallback"))
@@ -599,6 +620,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
             embedding_queries = parsed["embedding_queries"]
             author_names = parsed["author_names"]
             author_ids = parsed["author_ids"]
+            author_match = parsed["author_match"]
             search_mode = parsed["search_mode"]
             if span is not None:
                 span.set_attribute("repo_search.embedding_query_count", len(embedding_queries))
@@ -617,11 +639,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                     parsed["year_to"],
                     author_names,
                 )
-                rows = (
-                    fetch_author_results(*author_args, author_ids)
-                    if author_ids
-                    else fetch_author_results(*author_args)
-                )
+                rows = fetch_author_results(*author_args, author_ids, author_match)
                 for rank, row in enumerate(rows, start=1):
                     merged[row[0]] = {
                         "id": row[0],
@@ -651,10 +669,10 @@ async def search(request: SearchRequest) -> dict[str, Any]:
                         parsed["year_from"],
                         parsed["year_to"],
                     )
-                    if author_ids:
-                        rows = fetch_vector_results(*fetch_args, author_names, author_ids)
-                    elif author_names:
-                        rows = fetch_vector_results(*fetch_args, author_names)
+                    if author_ids or author_names:
+                        rows = fetch_vector_results(
+                            *fetch_args, author_names, author_ids, author_match
+                        )
                     else:
                         rows = fetch_vector_results(*fetch_args)
                     vector_candidate_count += len(rows)
