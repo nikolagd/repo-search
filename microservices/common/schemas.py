@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -7,12 +8,14 @@ from microservices.common.author_names import author_name_key
 
 MAX_AUTHOR_FILTERS = 10
 MAX_AUTHOR_NAME_LENGTH = 200
+AuthorMatch = Literal["any", "all"]
 
 
 class SearchRequest(BaseModel):
     query: str = Field(default="", max_length=1000)
     author_names: list[str] = Field(default_factory=list, max_length=MAX_AUTHOR_FILTERS)
     author_ids: list[int] = Field(default_factory=list, max_length=MAX_AUTHOR_FILTERS)
+    author_match: AuthorMatch | None = None
     limit: int = Field(10, ge=1, le=50)
 
     @field_validator("author_names", mode="before")

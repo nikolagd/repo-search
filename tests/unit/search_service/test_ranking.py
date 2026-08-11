@@ -64,6 +64,39 @@ def test_explicit_author_precedence_deduplicates_reversed_parser_name() -> None:
     assert search_main.merge_author_names([], ["P. P.", "P. Petrović"]) == ["P. Petrović"]
 
 
+def test_finalize_plan_tracks_only_nonexplicit_extracted_authors() -> None:
+    plan = search_main.finalize_search_plan(
+        {
+            "embedding_queries": ["Ime Prezime digitalna transformacija"],
+            "author_names": ["Prezime, Ime", "Drugi Autor"],
+            "author_match": "all",
+        },
+        ["Ime Prezime"],
+        [42],
+    )
+
+    assert plan["author_names"] == ["Ime Prezime", "Drugi Autor"]
+    assert plan["author_ids"] == [42]
+    assert plan["extracted_author_names"] == ["Drugi Autor"]
+    assert plan["author_match"] == "all"
+    assert plan["embedding_queries"] == ["digitalna transformacija"]
+
+
+def test_finalize_plan_explicit_author_match_overrides_parser_and_invalid_defaults_any() -> None:
+    explicit = search_main.finalize_search_plan(
+        {"embedding_queries": [], "author_names": ["Ime Prezime"], "author_match": "all"},
+        [],
+        explicit_author_match="any",
+    )
+    safe_default = search_main.finalize_search_plan(
+        {"embedding_queries": [], "author_names": ["Ime Prezime"], "author_match": "both"},
+        [],
+    )
+
+    assert explicit["author_match"] == "any"
+    assert safe_default["author_match"] == "any"
+
+
 def test_search_merges_candidates_and_ranks_with_all_boosts(monkeypatch: pytest.MonkeyPatch) -> None:
     _isolate_search_boundaries(monkeypatch)
     monkeypatch.setattr(search_main, "CANDIDATE_MULTIPLIER", 3)
@@ -214,7 +247,7 @@ def test_explicit_author_only_search_never_parses_or_embeds(monkeypatch: pytest.
     monkeypatch.setattr(
         search_main,
         "fetch_author_results",
-        lambda limit, year_from, year_to, authors: [
+        lambda limit, year_from, year_to, authors, author_ids, author_match: [
             _candidate_row(
                 11,
                 title="Author publication",
@@ -252,8 +285,8 @@ def test_selected_author_id_search_never_parses_or_embeds(monkeypatch: pytest.Mo
     monkeypatch.setattr(search_main, "embed_query", embed_mock)
     calls = []
 
-    def fetch(limit, year_from, year_to, author_names, author_ids):
-        calls.append((limit, year_from, year_to, author_names, author_ids))
+    def fetch(limit, year_from, year_to, author_names, author_ids, author_match):
+        calls.append((limit, year_from, year_to, author_names, author_ids, author_match))
         return []
 
     monkeypatch.setattr(search_main, "fetch_author_results", fetch)
@@ -263,7 +296,7 @@ def test_selected_author_id_search_never_parses_or_embeds(monkeypatch: pytest.Mo
 
     assert response["search_mode"] == "author"
     assert response["plan"]["author_ids"] == [42]
-    assert calls == [(5, None, None, [], [42])]
+    assert calls == [(5, None, None, [], [42], "any")]
     parse_mock.assert_not_awaited()
     embed_mock.assert_not_awaited()
 
@@ -293,8 +326,8 @@ def test_parser_author_only_search_applies_year_without_embedding(
     monkeypatch.setattr(search_main, "embed_query", embed_mock)
     calls: list[tuple[int, int | None, int | None, list[str]]] = []
 
-    def fetch(limit, year_from, year_to, authors):
-        calls.append((limit, year_from, year_to, authors))
+    def fetch(limit, year_from, year_to, authors, author_ids, author_match):
+        calls.append((limit, year_from, year_to, authors, author_ids, author_match))
         return []
 
     monkeypatch.setattr(search_main, "fetch_author_results", fetch)
@@ -303,8 +336,49 @@ def test_parser_author_only_search_applies_year_without_embedding(
     response = asyncio.run(search_main.search(SearchRequest(query="radovi autora Ime Prezime posle 2020")))
 
     assert response["search_mode"] == "author"
-    assert calls == [(10, 2021, 2024, ["Ime Prezime"])]
+    assert calls == [(10, 2021, 2024, ["Ime Prezime"], [], "any")]
     embed_mock.assert_not_awaited()
+
+
+def test_search_request_author_match_override_wins_only_when_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_search_boundaries(monkeypatch)
+    monkeypatch.setattr(
+        search_main,
+        "parse_search_query",
+        AsyncMock(
+            return_value={
+                "embedding_queries": [],
+                "author_names": ["Ime Prezime", "Drugi Autor"],
+                "author_match": "all",
+                "topic_phrases": [],
+                "ranking_phrases": [],
+                "year_from": None,
+                "year_to": None,
+                "interpreted_query": "coauthorship",
+                "used_fallback": False,
+                "parser_mode": "llm",
+            }
+        ),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        search_main,
+        "fetch_author_results",
+        lambda _limit, _year_from, _year_to, _names, _ids, match: calls.append(match) or [],
+    )
+    monkeypatch.setattr(search_main, "embed_query", AsyncMock(side_effect=AssertionError("no embed")))
+    monkeypatch.setattr(search_main, "record_retrieval_search", lambda *_args, **_kwargs: None)
+
+    inferred = asyncio.run(search_main.search(SearchRequest(query="coauthored")))
+    overridden = asyncio.run(
+        search_main.search(SearchRequest(query="coauthored", author_match="any"))
+    )
+
+    assert inferred["plan"]["author_match"] == "all"
+    assert overridden["plan"]["author_match"] == "any"
+    assert calls == ["all", "any"]
 
 
 def test_hybrid_search_embeds_only_topic_and_merges_explicit_authors_first(
@@ -332,8 +406,8 @@ def test_hybrid_search_embeds_only_topic_and_merges_explicit_authors_first(
     monkeypatch.setattr(search_main, "embed_query", embed_mock)
     calls: list[tuple[int | None, int | None, list[str]]] = []
 
-    def fetch(_vector, _limit, year_from, year_to, authors):
-        calls.append((year_from, year_to, authors))
+    def fetch(_vector, _limit, year_from, year_to, authors, author_ids, author_match):
+        calls.append((year_from, year_to, authors, author_ids, author_match))
         return []
 
     monkeypatch.setattr(search_main, "fetch_vector_results", fetch)
@@ -347,10 +421,12 @@ def test_hybrid_search_embeds_only_topic_and_merges_explicit_authors_first(
 
     assert response["search_mode"] == "hybrid"
     assert response["plan"]["author_names"] == ["Ime Prezime", "Drugi Autor"]
+    assert response["plan"]["extracted_author_names"] == ["Drugi Autor"]
+    assert response["plan"]["author_match"] == "any"
     assert response["plan"]["embedding_queries"] == ["digitalna transformacija"]
     assert response["plan"]["topic_phrases"] == ["digitalna transformacija"]
     embed_mock.assert_awaited_once_with("digitalna transformacija")
-    assert calls == [(2021, None, ["Ime Prezime", "Drugi Autor"])]
+    assert calls == [(2021, None, ["Ime Prezime", "Drugi Autor"], [], "any")]
 
 
 def test_search_caps_coverage_boost_for_many_matching_queries(monkeypatch: pytest.MonkeyPatch) -> None:

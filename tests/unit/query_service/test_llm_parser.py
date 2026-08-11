@@ -45,6 +45,9 @@ def test_parse_query_llm_returns_mocked_plan_without_http(
     assert "graph neural networks after 2020" in prompts[0]
     assert "Return ONLY valid JSON" in prompts[0]
     assert '"author_names": string[]' in prompts[0]
+    assert '"author_match": "any" | "all"' in prompts[0]
+    assert 'Set author_match to "any"' in prompts[0]
+    assert 'Set author_match to "all" only' in prompts[0]
     assert "never in embedding_queries" in prompts[0]
 
 
@@ -97,6 +100,8 @@ def test_repair_query_plan_submits_reason_and_bad_plan_without_http(
     assert "embedding_queries must be a non-empty list." in prompts[0]
     assert '"embedding_queries": []' in prompts[0]
     assert '"author_names": string[]' in prompts[0]
+    assert '"author_match": "any" | "all"' in prompts[0]
+    assert 'author_match must be exactly "any" or "all"' in prompts[0]
     assert "embedding_queries may be empty only when author_names is non-empty" in prompts[0]
 
 

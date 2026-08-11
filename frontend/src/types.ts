@@ -1,4 +1,5 @@
 export type JobStatus = "running" | "succeeded" | "failed";
+export type AuthorMatch = "any" | "all";
 
 export interface HealthResponse {
   status: string;
@@ -31,6 +32,8 @@ export interface SearchPlan {
   semantic_query: string;
   author_names: string[];
   author_ids: number[];
+  extracted_author_names: string[];
+  author_match: AuthorMatch;
   search_mode: "semantic" | "author" | "hybrid";
   topic_phrases: string[];
   year_from: number | null;
@@ -53,6 +56,7 @@ export interface AuthorSuggestionsResponse {
 export interface AuthorFilter {
   id: number | null;
   display_name: string;
+  source: "manual" | "query";
 }
 
 export interface SearchResult {

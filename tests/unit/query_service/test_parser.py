@@ -38,6 +38,7 @@ def test_fallback_parser_builds_deterministic_plan_without_external_services() -
         "embedding_queries": ["graph neural networks"],
         "semantic_query": "graph neural networks",
         "author_names": [],
+        "author_match": "any",
         "search_mode": "semantic",
         "topic_phrases": [],
         "year_from": 2021,
@@ -111,3 +112,51 @@ def test_fallback_parser_does_not_guess_capitalized_phrases_are_authors() -> Non
 
     assert plan["author_names"] == []
     assert plan["embedding_queries"] == ["digital transformation in higher education"]
+
+
+@pytest.mark.parametrize(
+    ("query", "authors", "author_match", "topic"),
+    [
+        ("radovi autora Ime Prezime i Drugo Ime", ["Ime Prezime", "Drugo Ime"], "any", ""),
+        ("radovi autora Ime Prezime ili Drugo Ime", ["Ime Prezime", "Drugo Ime"], "any", ""),
+        ("papers by Jane Doe and John Smith", ["Jane Doe", "John Smith"], "any", ""),
+        ("papers by Jane Doe or John Smith", ["Jane Doe", "John Smith"], "any", ""),
+        (
+            "zajedni\u010dki radovi autora Ime Prezime i Drugo Ime o digitalnoj transformaciji",
+            ["Ime Prezime", "Drugo Ime"],
+            "all",
+            "digitalnoj transformaciji",
+        ),
+        (
+            "papers coauthored by Jane Doe and John Smith about graph retrieval",
+            ["Jane Doe", "John Smith"],
+            "all",
+            "graph retrieval",
+        ),
+        (
+            "papers written by both Jane Doe and John Smith on repositories",
+            ["Jane Doe", "John Smith"],
+            "all",
+            "repositories",
+        ),
+    ],
+)
+def test_fallback_parser_supports_conservative_multiple_author_grammar(
+    query: str,
+    authors: list[str],
+    author_match: str,
+    topic: str,
+) -> None:
+    plan = parse_query_fallback(query)
+
+    assert plan["author_names"] == authors
+    assert plan["author_match"] == author_match
+    assert plan["semantic_query"] == topic
+    assert all(author.casefold() not in " ".join(plan["embedding_queries"]).casefold() for author in authors)
+
+
+def test_fallback_does_not_split_unmarked_capitalized_author_like_text() -> None:
+    plan = parse_query_fallback("Jane Doe and John Smith about graph retrieval")
+
+    assert plan["author_names"] == []
+    assert plan["author_match"] == "any"

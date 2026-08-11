@@ -2,15 +2,17 @@ import { type FormEvent, type KeyboardEvent, useEffect, useState } from "react";
 import { Plus, RefreshCw, Search, X } from "lucide-react";
 
 import { fetchJson } from "../api/client";
-import type { AuthorFilter, AuthorSuggestion, AuthorSuggestionsResponse } from "../types";
+import type { AuthorFilter, AuthorMatch, AuthorSuggestion, AuthorSuggestionsResponse } from "../types";
 
 interface SearchPanelProps {
   examples: string[];
   authorFilters: AuthorFilter[];
+  authorMatch: AuthorMatch;
   limit: number;
   loading: boolean;
   onLimitChange: (limit: number) => void;
   onAuthorFiltersChange: (authors: AuthorFilter[]) => void;
+  onAuthorMatchChange: (match: AuthorMatch) => void;
   onQueryChange: (query: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   query: string;
@@ -19,10 +21,12 @@ interface SearchPanelProps {
 export default function SearchPanel({
   examples,
   authorFilters,
+  authorMatch,
   limit,
   loading,
   onLimitChange,
   onAuthorFiltersChange,
+  onAuthorMatchChange,
   onQueryChange,
   onSubmit,
   query,
@@ -65,7 +69,7 @@ export default function SearchPanel({
     const name = authorDraft.trim().replace(/\s+/g, " ");
     if (!name || name.length > 200 || authorFilters.length >= 10) return;
     if (!authorFilters.some((author) => author.display_name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-      onAuthorFiltersChange([...authorFilters, { id: null, display_name: name }]);
+      onAuthorFiltersChange([...authorFilters, { id: null, display_name: name, source: "manual" }]);
     }
     setAuthorDraft("");
     setSuggestions([]);
@@ -75,7 +79,7 @@ export default function SearchPanel({
     if (authorFilters.length >= 10 || authorFilters.some((author) => author.id === suggestion.id)) return;
     onAuthorFiltersChange([
       ...authorFilters,
-      { id: suggestion.id, display_name: suggestion.display_name },
+      { id: suggestion.id, display_name: suggestion.display_name, source: "manual" },
     ]);
     setAuthorDraft("");
     setSuggestions([]);
@@ -140,8 +144,9 @@ export default function SearchPanel({
         {!!authorFilters.length && (
           <div className="author-chips" aria-label="Selected author filters">
             {authorFilters.map((author) => (
-              <span className="author-chip" key={author.id ?? author.display_name.toLocaleLowerCase()}>
+              <span className="author-chip" key={`${author.source}:${author.id ?? author.display_name.toLocaleLowerCase()}`}>
                 {author.display_name}
+                {author.source === "query" && <small>query</small>}
                 <button
                   type="button"
                   onClick={() => onAuthorFiltersChange(authorFilters.filter((item) => item !== author))}
@@ -152,6 +157,26 @@ export default function SearchPanel({
                 </button>
               </span>
             ))}
+          </div>
+        )}
+        {authorFilters.length >= 2 && (
+          <div className="author-match" role="group" aria-label="Author match mode">
+            <button
+              type="button"
+              aria-pressed={authorMatch === "any"}
+              className={authorMatch === "any" ? "active" : ""}
+              onClick={() => onAuthorMatchChange("any")}
+            >
+              Any author
+            </button>
+            <button
+              type="button"
+              aria-pressed={authorMatch === "all"}
+              className={authorMatch === "all" ? "active" : ""}
+              onClick={() => onAuthorMatchChange("all")}
+            >
+              All authors
+            </button>
           </div>
         )}
       </div>

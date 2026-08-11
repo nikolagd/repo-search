@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -106,4 +107,39 @@ def test_author_suggestion_route_proxies_to_search_service(monkeypatch: pytest.M
         "base_url": gateway.SEARCH_SERVICE_URL,
         "path": "/authors/suggestions",
         "query": "q=Petrovci&limit=5",
+    }
+
+
+def test_search_route_preserves_optional_author_match_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_proxy(request, base_url, path):
+        return JSONResponse(
+            {
+                "base_url": base_url,
+                "path": path,
+                "body": json.loads((await request.body()).decode("utf-8")),
+            }
+        )
+
+    monkeypatch.setattr(gateway, "proxy_request", fake_proxy)
+    gateway.app.dependency_overrides[require_api_token] = lambda: None
+    try:
+        with TestClient(gateway.app) as client:
+            response = client.post(
+                "/api/search",
+                json={
+                    "query": "papers by Jane Doe and John Smith",
+                    "author_match": "all",
+                },
+            )
+    finally:
+        gateway.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "base_url": gateway.SEARCH_SERVICE_URL,
+        "path": "/search",
+        "body": {
+            "query": "papers by Jane Doe and John Smith",
+            "author_match": "all",
+        },
     }

@@ -50,6 +50,7 @@ def test_normalize_plan_builds_canonical_query_service_response() -> None:
         "embedding_queries": ["primary topic", "secondary topic"],
         "semantic_query": "primary topic",
         "author_names": [],
+        "author_match": "any",
         "search_mode": "semantic",
         "topic_phrases": ["main phrase"],
         "year_from": 2019,
@@ -94,6 +95,10 @@ def test_normalize_plan_supplies_default_interpretation() -> None:
         (
             {"embedding_queries": ["AI"], "year_to": FIXED_CURRENT_YEAR + 2},
             "Extracted year is outside the allowed range.",
+        ),
+        (
+            {"embedding_queries": ["AI"], "author_match": "both"},
+            'author_match must be either "any" or "all".',
         ),
     ],
 )
@@ -206,6 +211,42 @@ def test_normalize_plan_allows_author_only_and_derives_mode() -> None:
     assert plan["semantic_query"] == ""
     assert plan["author_names"] == ["Ime Prezime"]
     assert plan["search_mode"] == "author"
+    assert plan["author_match"] == "any"
+
+
+def test_normalize_plan_preserves_valid_all_author_match() -> None:
+    plan, reason = query_handler.normalize_plan(
+        {
+            "embedding_queries": [],
+            "author_names": ["Ime Prezime", "Drugi Autor"],
+            "author_match": "all",
+        },
+        "zajednicki radovi autora Ime Prezime i Drugi Autor",
+    )
+
+    assert reason is None
+    assert plan is not None
+    assert plan["author_match"] == "all"
+
+
+def test_invalid_author_match_is_repaired_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    valid_query_plan: dict,
+) -> None:
+    bad_plan = {"embedding_queries": ["AI"], "author_match": "both"}
+    repaired = {**valid_query_plan, "author_match": "all"}
+    repair_calls: list[str] = []
+    monkeypatch.setattr(query_handler, "parse_query_llm", lambda _query: bad_plan)
+    monkeypatch.setattr(
+        query_handler,
+        "repair_query_plan",
+        lambda _query, _raw, reason: repair_calls.append(reason) or repaired,
+    )
+
+    plan = query_handler.parse_query("papers coauthored by Jane Doe and John Smith")
+
+    assert plan["author_match"] == "all"
+    assert repair_calls == ['author_match must be either "any" or "all".']
 
 
 def test_normalize_plan_removes_authors_from_all_topical_fields() -> None:

@@ -340,15 +340,72 @@ def test_structured_author_search_uses_relational_filters_and_deterministic_orde
     assert [row[0] for row in reversed_initial] == [row[0] for row in initials]
     short_token_is_not_a_wildcard = search_main.fetch_author_results(10, None, None, ["Pe Petrović"])
     assert [row[0] for row in short_token_is_not_a_wildcard] == []
-    multiple = search_main.fetch_author_results(10, None, None, ["Ime Prezime", "Drugi Autor"])
+    multiple = search_main.fetch_author_results(
+        10, None, None, ["Ime Prezime", "Drugi Autor"], author_match="all"
+    )
     assert [row[0] for row in multiple] == [publication_ids["multiple"]]
+    any_names = search_main.fetch_author_results(
+        10, None, None, ["Ime Prezime", "Drugi Autor"], author_match="any"
+    )
+    assert {row[0] for row in any_names} == {
+        publication_ids["reversed"],
+        publication_ids["multiple"],
+        publication_ids["null-date"],
+        publication_ids["cyrillic-author"],
+    }
     cyrillic_multiple = search_main.fetch_author_results(
-        10, None, None, ["Petar Petrovic", "Drugi Autor"]
+        10, None, None, ["Petar Petrovic", "Drugi Autor"], author_match="all"
     )
     assert [row[0] for row in cyrillic_multiple] == [publication_ids["cyrillic-author"]]
     year_filtered = search_main.fetch_author_results(10, 2024, 2024, ["Ime Prezime"])
     assert [row[0] for row in year_filtered] == [publication_ids["reversed"]]
     assert publication_ids["inactive"] not in {row[0] for row in exact}
+
+    one_any = search_main.fetch_author_results(
+        10, None, None, ["Ime Prezime"], author_match="any"
+    )
+    one_all = search_main.fetch_author_results(
+        10, None, None, ["Ime Prezime"], author_match="all"
+    )
+    assert [row[0] for row in one_any] == [row[0] for row in one_all]
+
+    id_any = search_main.fetch_author_results(
+        10,
+        None,
+        None,
+        [],
+        [author_ids["Prezime, Ime"], author_ids["Drugi Autor"]],
+        "any",
+    )
+    id_all = search_main.fetch_author_results(
+        10,
+        None,
+        None,
+        [],
+        [author_ids["Prezime, Ime"], author_ids["Drugi Autor"]],
+        "all",
+    )
+    assert {row[0] for row in id_any} == {
+        publication_ids["reversed"],
+        publication_ids["multiple"],
+        publication_ids["null-date"],
+        publication_ids["cyrillic-author"],
+    }
+    assert [row[0] for row in id_all] == [publication_ids["multiple"]]
+
+    mixed_any = search_main.fetch_author_results(
+        10, None, None, ["Ime Prezime"], [author_ids["Petar Petrovic"]], "any"
+    )
+    mixed_all = search_main.fetch_author_results(
+        10, None, None, ["Ime Prezime"], [author_ids["Petar Petrovic"]], "all"
+    )
+    assert {row[0] for row in mixed_any} == {
+        publication_ids["reversed"],
+        publication_ids["multiple"],
+        publication_ids["null-date"],
+        publication_ids["visible-variant"],
+    }
+    assert mixed_all == []
 
     query_vector = [1.0, 0.0, *([0.0] * (VECTOR_DIMENSIONS - 2))]
     hybrid = search_main.fetch_vector_results(query_vector, 10, None, None, ["Drugi Autor"])
@@ -356,6 +413,29 @@ def test_structured_author_search_uses_relational_filters_and_deterministic_orde
         publication_ids["multiple"],
         publication_ids["cyrillic-author"],
     ]
+    hybrid_all = search_main.fetch_vector_results(
+        query_vector,
+        10,
+        None,
+        None,
+        ["Ime Prezime", "Drugi Autor"],
+        author_match="all",
+    )
+    hybrid_any = search_main.fetch_vector_results(
+        query_vector,
+        10,
+        None,
+        None,
+        ["Ime Prezime", "Drugi Autor"],
+        author_match="any",
+    )
+    assert [row[0] for row in hybrid_all] == [publication_ids["multiple"]]
+    assert {row[0] for row in hybrid_any} == {
+        publication_ids["reversed"],
+        publication_ids["multiple"],
+        publication_ids["null-date"],
+        publication_ids["cyrillic-author"],
+    }
 
     selected = search_main.fetch_author_results(
         10, None, None, [], [author_ids["Petar Petrovic"]]
