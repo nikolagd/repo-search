@@ -10,9 +10,17 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 from microservices.common.config import service_url
+from microservices.common.health import (
+    HEALTH_OK,
+    HEALTH_UNAVAILABLE,
+    aggregate_status,
+    build_health_response,
+    build_liveness_response,
+    build_readiness_response,
+)
 from microservices.common.http import observed_async_request, proxy_request, raise_for_service
 from microservices.common.observability import setup_observability
-from microservices.common.schemas import HealthResponse, StatsResponse
+from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse, StatsResponse
 from microservices.common.security import internal_headers, require_api_token
 
 app = FastAPI(title="Repo Search API Gateway", version="0.1.0")
@@ -35,6 +43,12 @@ MODEL_OBSERVABILITY_WINDOWS = {
     "24h": 24 * 60 * 60,
     "7d": 7 * 24 * 60 * 60,
     "15d": 15 * 24 * 60 * 60,
+}
+GATEWAY_REQUIRED_SERVICES = {
+    "auth-service": AUTH_SERVICE_URL,
+    "catalog-service": CATALOG_SERVICE_URL,
+    "search-service": SEARCH_SERVICE_URL,
+    "job-service": JOB_SERVICE_URL,
 }
 
 
@@ -131,46 +145,52 @@ async def prometheus_query_range(client: httpx.AsyncClient, query: str, window_s
     return payload.get("data", {}).get("result", [])
 
 
+async def gateway_readiness_dependencies() -> dict[str, str]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            results = await asyncio.gather(
+                *(
+                    observed_async_request(
+                        client,
+                        "GET",
+                        f"{base_url}/ready",
+                        service_name="gateway",
+                        upstream_service=service_name,
+                        headers=internal_headers(),
+                    )
+                    for service_name, base_url in GATEWAY_REQUIRED_SERVICES.items()
+                ),
+                return_exceptions=True,
+            )
+    except Exception:
+        return {service_name: HEALTH_UNAVAILABLE for service_name in GATEWAY_REQUIRED_SERVICES}
+
+    return {
+        service_name: (
+            HEALTH_UNAVAILABLE
+            if isinstance(result, BaseException)
+            else HEALTH_OK
+            if result.status_code < 400
+            else HEALTH_UNAVAILABLE
+        )
+        for service_name, result in zip(GATEWAY_REQUIRED_SERVICES, results, strict=True)
+    }
+
+
+@app.get("/api/live", response_model=LivenessResponse)
+def api_live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/api/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+async def api_ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, await gateway_readiness_dependencies())
+
+
 @app.get("/api/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
 async def health() -> HealthResponse:
-    async with httpx.AsyncClient(timeout=10) as client:
-        responses = await asyncio.gather(
-            observed_async_request(
-                client,
-                "GET",
-                f"{CATALOG_SERVICE_URL}/health",
-                service_name="gateway",
-                upstream_service="catalog-service",
-                headers=internal_headers(),
-            ),
-            observed_async_request(
-                client,
-                "GET",
-                f"{SEARCH_SERVICE_URL}/health",
-                service_name="gateway",
-                upstream_service="search-service",
-                headers=internal_headers(),
-            ),
-            observed_async_request(
-                client,
-                "GET",
-                f"{JOB_SERVICE_URL}/health",
-                service_name="gateway",
-                upstream_service="job-service",
-                headers=internal_headers(),
-            ),
-            observed_async_request(
-                client,
-                "GET",
-                f"{AUTH_SERVICE_URL}/health",
-                service_name="gateway",
-                upstream_service="auth-service",
-                headers=internal_headers(),
-            ),
-        )
-
-    database = "ok" if all(response.status_code < 400 for response in responses) else "unavailable"
-    return HealthResponse(status="ok", database=database)
+    dependencies = await gateway_readiness_dependencies()
+    return build_health_response(aggregate_status(dependencies), dependencies)
 
 
 @app.get("/api/repositories", dependencies=[Depends(require_api_token)])
@@ -208,6 +228,11 @@ async def stats() -> StatsResponse:
 @app.api_route("/api/search", methods=["POST"], dependencies=[Depends(require_api_token)])
 async def search(request: Request) -> Response:
     return await proxy_request(request, SEARCH_SERVICE_URL, "/search")
+
+
+@app.api_route("/api/authors/suggestions", methods=["GET"], dependencies=[Depends(require_api_token)])
+async def author_suggestions(request: Request) -> Response:
+    return await proxy_request(request, SEARCH_SERVICE_URL, "/authors/suggestions")
 
 
 @app.api_route("/api/auth/{path:path}", methods=["GET", "POST"], dependencies=[Depends(require_api_token)])
@@ -328,9 +353,22 @@ async def admin_embeddings(request: Request) -> dict:
     jobs = jobs_response.json()
     catalog_publications = catalog_response.json()["publications"]
     search_status = status_response.json()
-    missing_embeddings = max(catalog_publications - search_status["publications_with_embeddings"], 0)
+    return build_admin_embedding_status(catalog_publications, search_status, jobs)
+
+
+def build_admin_embedding_status(
+    catalog_publications: int,
+    search_status: dict,
+    jobs: list[dict],
+) -> dict:
+    missing_embeddings = search_status.get(
+        "missing_embeddings",
+        max(catalog_publications - search_status["publications_with_embeddings"], 0),
+    )
     return {
+        "current_embeddings": search_status.get("current_embeddings", search_status["publications_with_embeddings"]),
         "missing_embeddings": missing_embeddings,
+        "stale_embeddings": search_status.get("stale_embeddings", 0),
         "embedding_job": jobs[0] if jobs else None,
     }
 

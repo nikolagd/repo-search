@@ -123,6 +123,8 @@ Return ONLY valid JSON with this exact shape:
 
 {{
   "embedding_queries": string[],
+  "author_names": string[],
+  "author_match": "any" | "all",
   "topic_phrases": string[],
   "year_from": integer or null,
   "year_to": integer or null,
@@ -132,7 +134,11 @@ Return ONLY valid JSON with this exact shape:
 
 Rules:
 - embedding_queries are used for vector search.
-- embedding_queries must contain only the research topic, not date constraints.
+- embedding_queries must contain only the research topic, not date constraints, author names, or author-intent wording.
+- Put explicitly identified personal names only in author_names, never in embedding_queries, topic_phrases, or ranking_phrases.
+- Set author_match to "any" for "or", "ili", "any author", and general or ambiguous author lists such as "radovi autora A i B".
+- Set author_match to "all" only for explicit shared-authorship intent such as "zajedni\u010dki radovi", "koautorski radovi", "oba autora", "written by both", or "coauthored by".
+- embedding_queries may be empty only when author_names contains at least one valid name.
 - Never include temporal phrases in embedding_queries.
 - Extract dates only into year_from and year_to.
 - For Serbian and English temporal expressions:
@@ -140,7 +146,7 @@ Rules:
   - words meaning since/from set year_from to the mentioned year.
   - words meaning before/older-than/earlier-than set year_to to the year before the mentioned year.
   - words meaning until/to set year_to to the mentioned year.
-- Return at least 2 and at most 4 embedding_queries when useful.
+- For topical searches, return at least 1 and at most 4 embedding_queries when useful.
 - Include a standard academic English version when useful.
 - topic_phrases are the main content phrases for soft ranking.
 - ranking_phrases are only extra user-emphasized phrases.
@@ -179,12 +185,20 @@ Return ONLY valid JSON with this exact shape:
 
 {{
   "embedding_queries": string[],
+  "author_names": string[],
+  "author_match": "any" | "all",
   "topic_phrases": string[],
   "year_from": integer or null,
   "year_to": integer or null,
   "ranking_phrases": string[],
   "interpreted_query": string
 }}
+
+Repair rules:
+- Put explicitly identified personal names only in author_names.
+- author_match must be exactly "any" or "all"; use "any" unless the query explicitly requests shared authorship by every named author.
+- Remove author names and author-intent wording from embedding_queries, topic_phrases, and ranking_phrases.
+- embedding_queries may be empty only when author_names is non-empty.
 
 Invalid reason:
 {reason}

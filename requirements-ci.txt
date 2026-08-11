@@ -1,0 +1,13 @@
+# CPU-only dependencies imported by the unit and PostgreSQL/pgvector suites.
+-r requirements-dev.txt
+
+fastapi==0.136.1
+bm25s==0.3.10
+httpx==0.28.1
+prometheus-client==0.22.1
+psycopg2-binary==2.9.11
+pydantic==2.13.3
+PyJWT==2.12.1
+PyYAML==6.0.3
+requests==2.33.1
+starlette==1.0.0

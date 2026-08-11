@@ -12,7 +12,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 
 _TRACING_READY = False
 _FASTAPI_INSTRUMENTED_APPS: set[int] = set()
-PARSER_MODES = ("llm", "llm_repaired", "fallback", "fallback_service_error")
+PARSER_MODES = ("llm", "llm_repaired", "fallback", "fallback_service_error", "explicit")
 
 HTTP_REQUESTS_TOTAL = Counter(
     "repo_search_http_requests_total",
@@ -100,6 +100,17 @@ RETRIEVAL_SEARCHES_TOTAL = Counter(
     "repo_search_retrieval_searches_total",
     "Completed retrieval searches grouped by parser mode and result bucket.",
     ["service", "parser_mode", "result_bucket"],
+)
+RETRIEVAL_SEARCH_MODES_TOTAL = Counter(
+    "repo_search_retrieval_search_modes_total",
+    "Completed retrieval searches grouped by derived search mode.",
+    ["service", "search_mode"],
+)
+RETRIEVAL_AUTHOR_FILTER_COUNT = Histogram(
+    "repo_search_retrieval_author_filter_count",
+    "Number of structured author filters per search.",
+    ["service"],
+    buckets=(0, 1, 2, 3, 5, 10),
 )
 RETRIEVAL_ZERO_RESULTS_TOTAL = Counter(
     "repo_search_retrieval_zero_results_total",
@@ -406,22 +417,31 @@ def record_retrieval_search(
     embedding_query_count: int,
     vector_candidate_count: int,
     result_scores: list[float],
+    *,
+    result_count: int | None = None,
+    search_mode: str = "semantic",
+    author_filter_count: int = 0,
 ) -> None:
-    result_count = len(result_scores)
+    final_result_count = len(result_scores) if result_count is None else result_count
     normalized_parser_mode = normalize_parser_mode(parser_mode)
-    RETRIEVAL_SEARCHES_TOTAL.labels(service_name, normalized_parser_mode, _result_bucket(result_count)).inc()
+    RETRIEVAL_SEARCHES_TOTAL.labels(service_name, normalized_parser_mode, _result_bucket(final_result_count)).inc()
+    RETRIEVAL_SEARCH_MODES_TOTAL.labels(service_name, search_mode).inc()
+    RETRIEVAL_AUTHOR_FILTER_COUNT.labels(service_name).observe(author_filter_count)
     RETRIEVAL_EMBEDDING_QUERY_COUNT.labels(service_name).observe(embedding_query_count)
     RETRIEVAL_VECTOR_CANDIDATES.labels(service_name).observe(vector_candidate_count)
-    RETRIEVAL_FINAL_RESULTS.labels(service_name).observe(result_count)
+    RETRIEVAL_FINAL_RESULTS.labels(service_name).observe(final_result_count)
 
-    if result_count == 0:
+    if final_result_count == 0:
         RETRIEVAL_ZERO_RESULTS_TOTAL.labels(service_name, normalized_parser_mode).inc()
         RETRIEVAL_TOP_SCORE.labels(service_name).observe(0)
         RETRIEVAL_AVERAGE_SCORE.labels(service_name).observe(0)
         return
 
+    if not result_scores:
+        return
+
     top_score = max(result_scores)
-    average_score = sum(result_scores) / result_count
+    average_score = sum(result_scores) / len(result_scores)
     RETRIEVAL_TOP_SCORE.labels(service_name).observe(top_score)
     RETRIEVAL_AVERAGE_SCORE.labels(service_name).observe(average_score)
     for score in result_scores:

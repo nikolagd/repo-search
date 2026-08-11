@@ -66,9 +66,9 @@ services:
     ports:
       - "${MICROSERVICE_GATEWAY_HOST_PORT:-8090}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/api/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   auth-service:
@@ -94,9 +94,9 @@ services:
       db-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   catalog-service:
@@ -117,9 +117,9 @@ services:
       db-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   search-service:
@@ -138,19 +138,19 @@ services:
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
       QUERY_SERVICE_URL: http://query-service:8000
       EMBEDDING_SERVICE_URL: http://embedding-service:8000
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_MODEL_REVISION: ${EMBEDDING_MODEL_REVISION:-3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3}
     depends_on:
       db-primary:
         condition: service_healthy
       catalog-service:
         condition: service_healthy
-      query-service:
-        condition: service_healthy
       embedding-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   query-service:
@@ -167,14 +167,12 @@ services:
       LLM_MODEL: ${LLM_MODEL:-gemma4:12b}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
       LLM_WARMUP_ENABLED: ${LLM_WARMUP_ENABLED:-1}
-    depends_on:
-      ollama:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
+      start_period: 190s
 
   embedding-service:
     build:
@@ -186,17 +184,21 @@ services:
     gpus: all
     environment:
       API_TOKEN: ${API_TOKEN:-local-dev-api-token-change-me}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_MODEL_REVISION: ${EMBEDDING_MODEL_REVISION:-3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3}
+      EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cuda}
+      GPU_REQUIRED: ${GPU_REQUIRED:-true}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
     volumes:
       - model_cache:/models
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
-      start_period: 60s
+      start_period: 15m
 
   job-service:
     build:
@@ -216,9 +218,9 @@ services:
       db-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_TOKEN\" http://localhost:8000/ready || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 12
 
   job-worker:
@@ -239,6 +241,9 @@ services:
       EMBEDDING_SERVICE_URL: http://embedding-service:8000
       SEARCH_SERVICE_URL: http://search-service:8000
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
+      WORKER_STALE_JOB_TIMEOUT_SECONDS: ${WORKER_STALE_JOB_TIMEOUT_SECONDS:-120}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
       HARVEST_OUTPUT_DIR: /app/data
       METRICS_PORT: 9100
     depends_on:
@@ -252,7 +257,6 @@ services:
         condition: service_healthy
     volumes:
       - harvest_xml_data:/app/data
-    restart: unless-stopped
 
   frontend:
     build:
@@ -269,7 +273,6 @@ services:
 
   ollama:
     image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    restart: unless-stopped
     gpus: all
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
@@ -314,7 +317,6 @@ services:
         condition: service_healthy
     ports:
       - "${PROMETHEUS_HOST_PORT:-9090}:9090"
-    restart: unless-stopped
 
   grafana:
     image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
@@ -330,7 +332,6 @@ services:
       - prometheus
     ports:
       - "${GRAFANA_HOST_PORT:-3000}:3000"
-    restart: unless-stopped
 
   postgres-exporter:
     image: ${POSTGRES_EXPORTER_IMAGE:-prometheuscommunity/postgres-exporter:latest}
@@ -339,7 +340,6 @@ services:
     depends_on:
       db-primary:
         condition: service_healthy
-    restart: unless-stopped
 
   cadvisor:
     image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}
@@ -352,7 +352,6 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
     ports:
       - "${CADVISOR_HOST_PORT:-8088}:8080"
-    restart: unless-stopped
 
 volumes:
   shared_db_primary_data:

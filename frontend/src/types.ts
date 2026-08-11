@@ -1,6 +1,5 @@
-export type AuthMode = "login" | "register";
-
 export type JobStatus = "running" | "succeeded" | "failed";
+export type AuthorMatch = "any" | "all";
 
 export interface HealthResponse {
   status: string;
@@ -31,6 +30,11 @@ export interface StatsResponse {
 export interface SearchPlan {
   embedding_queries: string[];
   semantic_query: string;
+  author_names: string[];
+  author_ids: number[];
+  extracted_author_names: string[];
+  author_match: AuthorMatch;
+  search_mode: "semantic" | "author" | "hybrid";
   topic_phrases: string[];
   year_from: number | null;
   year_to: number | null;
@@ -39,21 +43,37 @@ export interface SearchPlan {
   used_fallback: boolean;
 }
 
+export interface AuthorSuggestion {
+  id: number;
+  display_name: string;
+  publication_count: number;
+}
+
+export interface AuthorSuggestionsResponse {
+  suggestions: AuthorSuggestion[];
+}
+
+export interface AuthorFilter {
+  id: number | null;
+  display_name: string;
+  source: "manual" | "query";
+}
+
 export interface SearchResult {
   id: number;
   title: string | null;
   abstract: string | null;
   source_url: string | null;
   date: string | null;
-  cosine_distance: number;
-  cosine_similarity: number;
+  cosine_distance: number | null;
+  cosine_similarity: number | null;
   topic_boost: number;
   ranking_boost: number;
   coverage_boost: number;
-  score: number;
+  score: number | null;
   repository: string | null;
   authors: string[];
-  matched_query: string;
+  matched_query: string | null;
   matched_queries: string[];
   best_rank: number;
 }
@@ -62,6 +82,7 @@ export interface SearchResponse {
   query: string;
   limit: number;
   plan: SearchPlan;
+  search_mode: "semantic" | "author" | "hybrid";
   results: SearchResult[];
   total: number;
 }
@@ -84,6 +105,15 @@ export interface HarvestJob {
   started_at: string | null;
   finished_at: string | null;
   processed_records: number | null;
+  received_records?: number | null;
+  parsed_records?: number | null;
+  skipped_records?: number | null;
+  deleted_records?: number | null;
+  deactivated_records?: number | null;
+  unknown_tombstones?: number | null;
+  already_inactive_tombstones?: number | null;
+  invalid_tombstones?: number | null;
+  pages_processed?: number | null;
   message: string;
 }
 
@@ -130,6 +160,8 @@ export interface ModelObservabilityResponse {
     llm_url?: string;
     llm_timeout_seconds?: number;
     embedding_model?: string;
+    embedding_model_revision?: string;
+    embedding_template_version?: string;
     embedding_device?: string;
     embedding_dimension?: number | null;
     ranking_config?: Record<string, number>;

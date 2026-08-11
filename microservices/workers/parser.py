@@ -1,5 +1,7 @@
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from datetime import datetime
 
 NS = {
     "oai": "http://www.openarchives.org/OAI/2.0/",
@@ -10,11 +12,30 @@ NS = {
     "mods": "http://www.loc.gov/mods/v3",
 }
 
-DATE_ONLY_PATTERNS = [
-    re.compile(r"^\d{4}-\d{2}-\d{2}$"),
-    re.compile(r"^\d{4}-\d{2}$"),
-    re.compile(r"^\d{4}$"),
+DATE_VALUE_PATTERNS = [
+    (re.compile(r"^\d{4}-\d{2}-\d{2}[T ].+$"), None),
+    (re.compile(r"^\d{4}-\d{2}-\d{2}$"), "%Y-%m-%d"),
+    (re.compile(r"^\d{4}-\d{2}$"), "%Y-%m"),
+    (re.compile(r"^\d{4}$"), "%Y"),
 ]
+
+
+@dataclass(frozen=True)
+class OAITombstone:
+    oai_identifier: str | None
+    datestamp: str | None
+    set_specs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OAIPageResult:
+    records: list[dict]
+    tombstones: list[OAITombstone]
+    resumption_token: str | None
+    received_records: int
+    parsed_records: int
+    skipped_records: int
+    deleted_records: int
 
 
 def get_texts(parent, path):
@@ -33,12 +54,28 @@ def get_direct_texts_by_name(parent, names):
     return values
 
 
-def pick_date_only(dates):
-    for pattern in DATE_ONLY_PATTERNS:
-        for value in dates:
-            if pattern.match(value):
-                return value
+def pick_valid_date(dates):
+    for pattern, date_format in DATE_VALUE_PATTERNS:
+        for raw_value in dates:
+            value = raw_value.strip()
+            if not pattern.match(value):
+                continue
+
+            try:
+                if date_format is None:
+                    iso_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+                    datetime.fromisoformat(iso_value)
+                else:
+                    datetime.strptime(value, date_format)
+            except ValueError:
+                continue
+
+            return value
     return None
+
+
+def pick_date_only(dates):
+    return pick_valid_date(dates)
 
 
 def pick_source_url(identifiers):
@@ -57,6 +94,22 @@ def get_oai_identifier(record):
         return None
     identifier_el = header.find("oai:identifier", NS)
     return identifier_el.text.strip() if identifier_el is not None and identifier_el.text else None
+
+
+def get_header_text(header, tag):
+    element = header.find(f"oai:{tag}", NS)
+    if element is None or not element.text:
+        return None
+    value = element.text.strip()
+    return value or None
+
+
+def parse_tombstone(header) -> OAITombstone:
+    return OAITombstone(
+        oai_identifier=get_header_text(header, "identifier"),
+        datestamp=get_header_text(header, "datestamp"),
+        set_specs=tuple(get_texts(header, "oai:setSpec")),
+    )
 
 
 def build_record(oai_identifier, title, authors, date, abstract, identifiers, subjects, languages):
@@ -83,7 +136,7 @@ def parse_oai_dc_metadata(dc_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=(get_texts(dc_node, "dc:title") or [None])[0],
         authors=creators if creators else contributors,
-        date=pick_date_only(dates),
+        date=pick_valid_date(dates),
         abstract=descriptions[0] if descriptions else None,
         identifiers=identifiers,
         subjects=get_texts(dc_node, "dc:subject"),
@@ -103,7 +156,7 @@ def parse_qdc_metadata(qdc_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=titles[0] if titles else None,
         authors=creators if creators else contributors,
-        date=issued_dates[0] if issued_dates else pick_date_only(dates),
+        date=pick_valid_date(issued_dates) or pick_valid_date(dates),
         abstract=descriptions[0] if descriptions else None,
         identifiers=identifiers,
         subjects=get_direct_texts_by_name(qdc_node, {"subject"}),
@@ -135,7 +188,7 @@ def parse_dim_metadata(dim_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=titles[0] if titles else None,
         authors=creators if creators else contributors,
-        date=issued_dates[0] if issued_dates else pick_date_only(dates),
+        date=pick_valid_date(issued_dates) or pick_valid_date(dates),
         abstract=descriptions[0] if descriptions else None,
         identifiers=identifiers,
         subjects=dim_field_texts(dim_node, "subject"),
@@ -153,7 +206,7 @@ def parse_mods_metadata(mods_node, oai_identifier):
         oai_identifier=oai_identifier,
         title=titles[0] if titles else None,
         authors=get_texts(mods_node, ".//mods:name/mods:namePart"),
-        date=issued_dates[0] if issued_dates else pick_date_only(dates),
+        date=pick_valid_date(issued_dates) or pick_valid_date(dates),
         abstract=abstracts[0] if abstracts else None,
         identifiers=identifiers,
         subjects=get_texts(mods_node, ".//mods:subject/mods:topic"),
@@ -179,18 +232,62 @@ def parse_metadata(metadata, metadata_prefix, oai_identifier):
     return parse_oai_dc_metadata(dc_node, oai_identifier) if dc_node is not None else None
 
 
-def parse_oai_xml(xml_text: str, metadata_prefix="oai_dc"):
+def has_usable_metadata(record: dict) -> bool:
+    for field in ("title", "authors", "date", "abstract", "identifiers", "subjects", "languages"):
+        value = record.get(field)
+        if isinstance(value, list):
+            if any(item for item in value):
+                return True
+        elif value:
+            return True
+    return False
+
+
+def parse_oai_page(xml_text: str, metadata_prefix="oai_dc") -> OAIPageResult:
     root = ET.fromstring(xml_text)
     parsed_records = []
+    tombstones = []
+    skipped_records = 0
+    deleted_records = 0
+    record_elements = root.findall(".//oai:record", NS)
 
-    for record in root.findall(".//oai:record", NS):
+    for record in record_elements:
+        header = record.find("oai:header", NS)
+        if header is not None and header.get("status") == "deleted":
+            deleted_records += 1
+            tombstones.append(parse_tombstone(header))
+            continue
+
         metadata = record.find("oai:metadata", NS)
         if metadata is None:
+            skipped_records += 1
             continue
-        parsed_record = parse_metadata(metadata, metadata_prefix, get_oai_identifier(record))
-        if parsed_record is not None:
-            parsed_records.append(parsed_record)
+
+        oai_identifier = get_oai_identifier(record)
+        if not oai_identifier:
+            skipped_records += 1
+            continue
+
+        parsed_record = parse_metadata(metadata, metadata_prefix, oai_identifier)
+        if parsed_record is None or not has_usable_metadata(parsed_record):
+            skipped_records += 1
+            continue
+
+        parsed_records.append(parsed_record)
 
     token_el = root.find(".//oai:resumptionToken", NS)
     token = token_el.text.strip() if token_el is not None and token_el.text else None
-    return parsed_records, token
+    return OAIPageResult(
+        records=parsed_records,
+        tombstones=tombstones,
+        resumption_token=token,
+        received_records=len(record_elements),
+        parsed_records=len(parsed_records),
+        skipped_records=skipped_records,
+        deleted_records=deleted_records,
+    )
+
+
+def parse_oai_xml(xml_text: str, metadata_prefix="oai_dc"):
+    page = parse_oai_page(xml_text, metadata_prefix)
+    return page.records, page.resumption_token

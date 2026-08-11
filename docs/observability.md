@@ -8,7 +8,7 @@ Ovaj sloj počinje metrikama performansi mikroservisa i lokalnim Grafana stack-o
 - Metrics endpoint za worker na `job-worker:9100`.
 - Prometheus scrape za aplikacione, worker, Postgres i kontejnerske metrike.
 - Grafana datasource i početni dashboard za request rate, p95 latenciju, latenciju zavisnosti, greške, embedding, dubinu job reda, CPU i memoriju.
-  Paneli `Request Rate`, `Inbound Latency p95` i `5xx Error Rate` filtriraju `/health` i `/api/health` rute, kako bi prikazivali realan korisnički/API saobraćaj, a ne Kubernetes readiness provere.
+  Paneli `Request Rate`, `Inbound Latency p95` i `5xx Error Rate` filtriraju `/live`, `/ready`, `/health` i odgovarajuće gateway `/api/*` rute, kako bi prikazivali realan korisnički/API saobraćaj, a ne probe orkestratora.
 - Postgres exporter za zdravlje i opterećenje baze.
 - kube-state-metrics za stanje Kubernetes objekata: podovi, deployment-i, restarti i replike.
 - node-exporter za CPU i memoriju Kubernetes node-a.
@@ -181,11 +181,13 @@ Sledeći Kubernetes observability korak je dodavanje Prometheus scrape-a unutar 
 
 ## Pokretanje u Kubernetes-u
 
-Observability manifesti su uključeni u `k8s/kustomization.yaml`, pa se primenjuju zajedno sa aplikacijom:
+Observability manifesti su uključeni u bazu, a primarni GPU deployment ih proširuje DCGM exporter-om i Prometheus GPU scrape konfiguracijom:
 
 ```powershell
-kubectl apply -k k8s/
+kubectl apply -k k8s-gpu/
 ```
+
+`k8s-gpu/` već uključuje `k8s/`; ne treba primenjivati oba direktorijuma redom. Eksplicitni CPU fallback za razvoj koristi `kubectl apply -k k8s/` i tada nema DCGM exporter.
 
 Sačekati rollout:
 

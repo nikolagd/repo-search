@@ -8,16 +8,14 @@ import {
   RefreshCw,
   Save,
   Shield,
-  UserPlus,
   X,
 } from "lucide-react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 
 import { fetchJson, getErrorMessage } from "../api/client";
 import type {
   AdminRepositoryResponse,
   AdminUser,
-  AuthMode,
   AuthResponse,
   EmbeddingStatusResponse,
   HarvestJob,
@@ -27,11 +25,11 @@ import type {
 import { formatDate } from "../utils/format";
 
 interface AdminPanelProps {
-  authMode?: AuthMode;
+  loginPage?: boolean;
   onOverviewRefresh: () => Promise<void>;
 }
 
-export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelProps) {
+export default function AdminPanel({ loginPage = false, onOverviewRefresh }: AdminPanelProps) {
   const navigate = useNavigate();
   const [admin, setAdmin] = useState<AdminUser | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -152,7 +150,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
     setAdminError("");
 
     try {
-      const payload = await fetchJson<AuthResponse>(`/api/auth/${authMode}`, {
+      const payload = await fetchJson<AuthResponse>("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ username, password }),
       });
@@ -261,9 +259,38 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
   }
 
   function renderJobStatus(job: HarvestJob) {
+    const showHarvestStatistics =
+      job.job_type === "repository_harvest" && job.received_records != null;
+
     return (
       <div className={`harvest-status ${job.status}`}>
-        <span>{job.message}</span>
+        <div className="harvest-status-content">
+          <span>{job.message}</span>
+          {showHarvestStatistics && (
+            <div className="harvest-statistics">
+              <span>Received {job.received_records}</span>
+              <span>Parsed {job.parsed_records ?? 0}</span>
+              <span>Skipped {job.skipped_records ?? 0}</span>
+              <span title="Source tombstone headers observed in the OAI-PMH response.">
+                Deleted {job.deleted_records ?? 0}
+              </span>
+              <span title="Previously active publications deactivated by matching repository and OAI identifier.">
+                Deactivated {job.deactivated_records ?? 0}
+              </span>
+              <span title="Tombstones whose repository-scoped OAI identifier is not stored locally.">
+                Unknown {job.unknown_tombstones ?? 0}
+              </span>
+              <span title="Repeated tombstones for publications that were already inactive.">
+                Already inactive {job.already_inactive_tombstones ?? 0}
+              </span>
+              <span title="Deleted headers without a usable OAI identifier; no local publication was changed.">
+                Invalid {job.invalid_tombstones ?? 0}
+              </span>
+              <span>Persisted {job.processed_records ?? 0}</span>
+              <span>Pages {job.pages_processed ?? 0}</span>
+            </div>
+          )}
+        </div>
         {job.status !== "running" && job.id && (
           <button
             className="status-dismiss"
@@ -303,7 +330,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
   }
 
   if (!admin) {
-    if (!authMode) {
+    if (!loginPage) {
       return <Navigate to="/admin/login" replace />;
     }
 
@@ -312,10 +339,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
         <form className="admin-auth-panel" onSubmit={submitAuth}>
           <div>
             <span className="eyebrow">Admin</span>
-            <h2>{authMode === "login" ? "Log in" : "Register"}</h2>
-            {authMode === "register" && (
-              <p className="admin-help">Registration is only available while no admin account exists.</p>
-            )}
+            <h2>Log in</h2>
           </div>
 
           <label htmlFor="admin-username">Username</label>
@@ -329,7 +353,7 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           <label htmlFor="admin-password">Password</label>
           <input
             id="admin-password"
-            autoComplete={authMode === "login" ? "current-password" : "new-password"}
+            autoComplete="current-password"
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -338,19 +362,15 @@ export default function AdminPanel({ authMode, onOverviewRefresh }: AdminPanelPr
           {authError && <div className="admin-message error">{authError}</div>}
 
           <button className="primary-action" type="submit" disabled={loading || !username.trim() || password.length < 8}>
-            {authMode === "login" ? <Shield aria-hidden="true" size={18} /> : <UserPlus aria-hidden="true" size={18} />}
-            {loading ? "Please wait..." : authMode === "login" ? "Log in" : "Register"}
+            <Shield aria-hidden="true" size={18} />
+            {loading ? "Please wait..." : "Log in"}
           </button>
-
-          <Link className="secondary-action" to={authMode === "login" ? "/admin/register" : "/admin/login"}>
-            {authMode === "login" ? "Initial admin setup" : "Use existing account"}
-          </Link>
         </form>
       </section>
     );
   }
 
-  if (authMode) {
+  if (loginPage) {
     return <Navigate to="/admin" replace />;
   }
 

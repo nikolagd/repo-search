@@ -1,14 +1,16 @@
 # Docker Compose microservices deployment
 
-Ovo uputstvo je arhivirano zato što je Kubernetes sada primarni način deployment-a. Koristiti ga samo za lokalni smoke test, debugging ili poređenje sa Kubernetes manifestima.
+Ovo uputstvo je arhivirano zato što je GPU Kubernetes deployment sada primarni način pokretanja. Docker Compose zadržava GPU kao obavezan režim za lokalni smoke test, debugging ili poređenje sa Kubernetes manifestima.
+
+Compose servisi nemaju automatsku restart politiku. Ceo stack se pokreće i zaustavlja eksplicitno kako posle restartovanja Docker Desktop-a ne bi ostao aktivan samo deo sistema niti zauzeo GPU koji koristi Minikube.
 
 ## 1. Preduslovi
 
 Potrebno je:
 
 - Docker Desktop
-- NVIDIA driver ako se koristi GPU
-- Docker GPU podrška ako se koristi CUDA
+- NVIDIA driver
+- Docker GPU podrška i NVIDIA Container Runtime
 
 Provera GPU-a:
 
@@ -31,11 +33,13 @@ API_TOKEN
 ADMIN_JWT_SECRET
 DB_PASSWORD
 DB_REPLICATION_PASSWORD
+EMBEDDING_DEVICE=cuda
+GPU_REQUIRED=true
 ```
 
 ## 3. Pokretanje aplikacije
 
-Pokrenuti sve kontejnere:
+Pokrenuti sve kontejnere u GPU-required režimu:
 
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml up --build -d
@@ -46,6 +50,27 @@ Proveriti status:
 ```powershell
 docker compose --env-file .env.microservices -f docker-compose.microservices.yml ps
 ```
+
+Compose već prosleđuje `gpus: all` i Embedding Service-u i Ollama servisu. Embedding Service prekida startup ako CUDA nije dostupna; nema tihog CPU fallback-a. CPU fallback bez NVIDIA uređaja je namenjen razvojnom `k8s/` deployment-u, ne ovoj Compose putanji.
+
+Pokrenuti reproduktivnu GPU proveru nakon što su servisi zdravi i model `gemma4:12b` preuzet:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-gpu-deployment.ps1 `
+  -Mode Compose `
+  -ComposeProject repo-search-microservices `
+  -EnvFile .env.microservices
+```
+
+Skripta proverava oba Docker GPU device request-a, CUDA status, stvaran embedding zahtev, stvaran Ollama inference, `ollama ps` GPU dokaz i završno health stanje. Bilo koji obavezni neuspeh završava proces nenultim exit kodom.
+
+Kreirati prvi administratorski nalog interaktivnom bootstrap komandom:
+
+```powershell
+docker compose --env-file .env.microservices -f docker-compose.microservices.yml exec auth-service python -m microservices.auth_service.bootstrap_admin
+```
+
+Lozinka se unosi preko `getpass` i ne prikazuje se u izlazu. Komanda odbija ponovno kreiranje ako administrator već postoji; trajne bootstrap lozinke se ne čuvaju u Compose konfiguraciji.
 
 ## 4. Ollama model
 

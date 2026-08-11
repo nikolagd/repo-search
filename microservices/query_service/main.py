@@ -1,28 +1,24 @@
-from fastapi import Depends, FastAPI
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Response
 from pydantic import BaseModel, Field
 
 from microservices.common.app_logging import emit_app_event
+from microservices.common.health import build_health_response, build_liveness_response, build_readiness_response
 from microservices.common.observability import (
     observe_query_parse,
     record_retrieval_parser_event,
     set_retrieval_model_info,
     setup_observability,
 )
-from microservices.common.schemas import HealthResponse
+from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse
 from microservices.common.security import require_api_token
 from microservices.query_service.llm_parser import LLM_MODEL, LLM_PROVIDER, LLM_TIMEOUT, LLM_URL, LLM_WARMUP_ENABLED, warm_up_llm
 from microservices.query_service.query_handler import parse_query
 
-app = FastAPI(title="Repo Search Query Service", version="0.1.0")
-setup_observability(app, "query-service")
-
-
-class QueryParseRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=1000)
-
-
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     warm_up_llm()
     set_retrieval_model_info(
         "query-service",
@@ -34,11 +30,34 @@ def startup() -> None:
             "llm_warmup_enabled": LLM_WARMUP_ENABLED,
         },
     )
+    yield
+
+
+app = FastAPI(title="Repo Search Query Service", version="0.1.0", lifespan=lifespan)
+setup_observability(app, "query-service")
+
+
+class QueryParseRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=1000)
+
+
+def readiness_dependencies() -> dict[str, str]:
+    return {}
+
+
+@app.get("/live", response_model=LivenessResponse)
+def live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+def ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, readiness_dependencies())
 
 
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", database="not-used")
+    return build_health_response("not-used", readiness_dependencies())
 
 
 @app.get("/model/status", dependencies=[Depends(require_api_token)])
@@ -67,9 +86,13 @@ def parse(request: QueryParseRequest) -> dict:
                 parser_mode=parser_mode,
                 query_length=len(request.query),
                 embedding_query_count=len(plan.get("embedding_queries", [])),
+                search_mode=plan.get("search_mode", "semantic"),
+                author_filter_count=len(plan.get("author_names", [])),
             )
         if span is not None:
             span.set_attribute("repo_search.embedding_query_count", len(plan.get("embedding_queries", [])))
+            span.set_attribute("repo_search.search_mode", plan.get("search_mode", "semantic"))
+            span.set_attribute("repo_search.author_filter_count", len(plan.get("author_names", [])))
             span.set_attribute("repo_search.used_fallback", bool(plan.get("used_fallback")))
             span.set_attribute("repo_search.parser_mode", parser_mode)
         return plan

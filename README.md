@@ -1,6 +1,22 @@
-Primarni način pokretanja aplikacije je Kubernetes preko lokalnog Minikube klastera.
+Primarni način pokretanja aplikacije je GPU Kubernetes deployment preko lokalnog Minikube klastera i `k8s-gpu/` overlay-a. Embedding Service zahteva CUDA, a Ollama koristi GPU za `gemma4:12b` inference.
 
 Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](docs/docker-compose-microservices.md) i treba ga koristiti samo za lokalni smoke test, debugging van Kubernetes-a ili poređenje sa manifestima.
+
+## Režimi pretrage i filter autora
+
+Search API prihvata `query`, opcione liste `author_names` i `author_ids`, opcioni `author_match` i `limit`. Zahtev mora imati neprazan tekst upita, najmanje jedan autorski uslov ili oba. Trusted kod, a ne LLM, izvodi jedan od tri režima:
+
+- `semantic`: tematski upit bez autora;
+- `author`: jedan ili više autora bez tematskog upita; Embedding Service se ne poziva;
+- `hybrid`: tematski embedding uz strukturisane filtere autora i godine.
+
+Imena autora se nikada ne dodaju u embedding publikacije niti se vektorizuju. Pretraga koristi relacije `author` i `publication_author`. Ručno uneto ime prolazi kroz determinističku kanonizaciju srpske ćirilice i latinice, dijakritika, interpunkcije, redosleda tokena i kontrolisanih inicijala. Izbor predloga prosleđuje tačan lokalni `author.id`. `pg_trgm` i generated `author.search_name` kolona koriste se samo za pronalaženje i rangiranje predloga; fuzzy sličnost nije uslov za filtriranje publikacija.
+
+Kod više autora `author_match=any` prihvata publikaciju povezanu sa bar jednim navedenim autorom, dok `author_match=all` zahteva sve navedene autore. Opšte ili dvosmislene liste podrazumevaju `any`. Eksplicitni oblici za zajedničke ili koautorske radove daju `all`, a ručni izbor korisnika ima prednost nad parser-om.
+
+Query Service i fallback parser izdvajaju samo obeležene autorske konstrukcije. Imena prepoznata u glavnom upitu vraćaju se kao `extracted_author_names` u postojećem search odgovoru i frontend ih prikazuje kao query oznake bez dodatnog LLM poziva. Ona se ne pretvaraju automatski u lokalne ID vrednosti. Fallback podržava oblike kao `autor: Ime Prezime`, `radovi autora Ime Prezime`, obeležene liste sa `i`/`ili`, `papers by Name`, kao i eksplicitne oblike za koautorstvo. Proizvoljan tekst koji samo liči na ime ne tumači se automatski kao autor.
+
+Author-only rezultati su deterministički poređani po datumu opadajuće (`NULLS LAST`), zatim po naslovu i ID-u. Nemaju izmišljenu kosinusnu sličnost niti skor. U author-only režimu Query i Embedding servisi se ne pozivaju; u hybrid režimu autorski uslov ograničava kandidate pre vektorskog rangiranja.
 
 ## 1. Preduslovi
 
@@ -9,7 +25,9 @@ Potrebno je:
 - Docker Desktop
 - Minikube
 - kubectl
-- NVIDIA driver ako se koristi GPU
+- NVIDIA driver i NVIDIA Container Runtime
+
+Primarna konfiguracija zahteva NVIDIA GPU. `k8s/` ostaje eksplicitni CPU fallback za razvoj i nije normalna deployment putanja.
 
 Instalacija Minikube-a i kubectl-a:
 
@@ -28,14 +46,7 @@ nvidia-smi
 
 ## 2. Pokretanje Minikube klastera
 
-CPU verzija:
-
-```powershell
-minikube start --driver=docker --profile repo-search
-kubectl config use-context repo-search
-```
-
-GPU verzija:
+GPU verzija (primarna):
 
 U Docker Desktop-u proveriti da je NVIDIA runtime dostupan i postavljen kao default runtime:
 
@@ -67,10 +78,17 @@ minikube addons enable nvidia-device-plugin -p repo-search
 kubectl -n kube-system rollout status daemonset/nvidia-device-plugin-daemonset --timeout=180s
 ```
 
-Provera da li Kubernetes vidi GPU:
+Provera da li Kubernetes vidi jedan zdrav GPU resurs:
 
 ```powershell
 kubectl describe node repo-search | Select-String nvidia.com/gpu
+```
+
+CPU fallback za razvoj se pokreće bez `--gpus=all` i koristi samo `k8s/`:
+
+```powershell
+minikube start --driver=docker --profile repo-search-cpu
+kubectl config use-context repo-search-cpu
 ```
 
 ## 3. Metrics server
@@ -118,19 +136,31 @@ docker build -f frontend/Dockerfile -t repo-search-microservices-frontend:latest
 
 ## 5. Deploy
 
-CPU deploy:
-
-```powershell
-kubectl apply -k k8s/
-```
-
-GPU deploy:
+GPU deploy je primarna i samostalna komanda:
 
 ```powershell
 kubectl apply -k k8s-gpu/
 ```
 
-GPU overlay dodeljuje `nvidia.com/gpu` resurs za `embedding-service` i uključuje NVIDIA runtime za `ollama`.
+Ne primenjivati prvo `k8s/`: `k8s-gpu/` ga već uključuje kao bazu. Overlay postavlja `EMBEDDING_DEVICE=cuda`, `GPU_REQUIRED=true`, `RuntimeClass nvidia` za Embedding Service i Ollama i zadržava DCGM exporter/Prometheus GPU metrike.
+
+Lokalni klaster ima jedan fizički GPU i ne koristi NVIDIA time-slicing. Zato samo Embedding Service traži ekskluzivni `nvidia.com/gpu: 1`, dok Ollama koristi isti uređaj preko NVIDIA runtime-a i `NVIDIA_VISIBLE_DEVICES=all`, bez drugog Kubernetes GPU zahteva. Ovo je proverena lokalna runtime podela uređaja, a ne Kubernetes-native resource sharing; dodavanje drugog `nvidia.com/gpu: 1` zahteva ostavilo bi jedan pod u `Pending` stanju.
+
+Eksplicitni CPU fallback za razvoj:
+
+```powershell
+kubectl apply -k k8s/
+```
+
+U fallback-u su `EMBEDDING_DEVICE=auto` i `GPU_REQUIRED=false`.
+
+Posle rollout-a i preuzimanja `gemma4:12b` pokrenuti kompletnu GPU proveru:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-gpu-deployment.ps1 -Mode Kubernetes -MinikubeProfile repo-search
+```
+
+Skripta fail-fast proverava node GPU resurs, NVIDIA RuntimeClass, zakazivanje i spremnost oba workload-a, CUDA uređaj i naziv GPU-a, embedding zahtev, Ollama inference i `ollama ps`, DCGM endpoint i Prometheus scrape. Ne ispisuje `API_TOKEN`; koristi ga samo unutar pokrenutog Embedding Service procesa. Svaki obavezni neuspeh vraća nenulti exit kod.
 
 Sačekati rollout:
 
@@ -162,6 +192,16 @@ Proveriti podove:
 ```powershell
 kubectl -n repo-search get pods
 ```
+
+### Kreiranje prvog administratora
+
+Na novoj bazi prvi administratorski nalog se kreira eksplicitno u `auth-service` podu:
+
+```powershell
+kubectl -n repo-search exec -it deployment/auth-service -- python -m microservices.auth_service.bootstrap_admin
+```
+
+Komanda interaktivno traži korisničko ime i lozinku; unos lozinke koristi `getpass`, pa se ne upisuje u shell istoriju niti se prikazuje u izlazu. Bootstrap se odbija ako administratorski nalog već postoji. Javni `/auth/register` i frontend `/admin/register` nisu dostupni; postojeći administrator se prijavljuje na `/admin/login`.
 
 Ako su image-i rebuildovani sa istim `:latest` tagovima, restartovati deployment-e:
 
@@ -233,12 +273,18 @@ Otvoriti:
 http://<minikube-ip>:30091
 ```
 
-Gateway health check:
+Gateway liveness, readiness i kompatibilna health provera:
 
 ```powershell
 kubectl -n repo-search port-forward service/gateway 8090:8000
+curl.exe http://localhost:8090/api/live
+curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/ready
 curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/health
 ```
+
+`/api/live` bez autentifikacije potvrđuje samo da gateway proces odgovara. `/api/ready` zahteva `X-API-Key`, proverava auth, catalog, search i job servise i vraća HTTP 503 ako javna aplikacija nije spremna. `/api/health` je za kompatibilnost: zahteva token i uvek vraća HTTP 200, ali polje `status` i dalje pokazuje stvarno stanje, pa se ne koristi kao readiness signal. Interni servisi koriste iste semantike na `/live`, `/ready` i `/health` putanjama bez `/api` prefiksa.
+
+Query servis ostaje spreman i kada Ollama nije dostupna, jer tada koristi postojeći fallback parser. Ollama URL i dijagnostika ostaju dostupni, ali Ollama niti Query servis nisu startup preduslov za Search.
 
 ## 8. Observability
 
@@ -409,7 +455,7 @@ Ako posle restartovanja Docker Desktop-a ili `minikube start` podovi prvo izgled
 embedding-service -> search-service -> gateway
 ```
 
-`embedding-service` mora prvo da dobije GPU, učita model i prođe readiness proveru. Dok se to ne desi, `search-service` može ostati u `Init` stanju jer čeka `embedding-service`, a `gateway` može biti `0/1` jer njegov health check poziva downstream servise. Proveriti stanje nekoliko puta u razmaku od 30-60 sekundi:
+`embedding-service` mora prvo da dobije GPU, učita model i prođe readiness proveru. Dok se to ne desi, `search-service` može ostati u `Init` stanju jer čeka spremne catalog i embedding servise, a `gateway` može biti `0/1` jer njegova readiness provera poziva obavezne downstream servise. Query i Ollama ne blokiraju ovaj redosled zato što Search može da koristi fallback parser. Proveriti stanje nekoliko puta u razmaku od 30-60 sekundi:
 
 ```powershell
 kubectl -n repo-search get pods

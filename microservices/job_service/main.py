@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 
 from microservices.common.db import get_connection
+from microservices.common.health import (
+    build_health_response,
+    build_liveness_response,
+    build_readiness_response,
+    check_database,
+)
 from microservices.common.observability import (
     set_job_oldest_queued_age,
     set_job_oldest_running_age,
@@ -14,10 +22,17 @@ from microservices.common.observability import (
     set_jobs_by_status,
     setup_observability,
 )
-from microservices.common.schemas import HealthResponse
+from microservices.common.schemas import HealthResponse, LivenessResponse, ReadinessResponse
 from microservices.common.security import require_api_token
 
-app = FastAPI(title="Repo Search Job Service", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    ensure_schema()
+    yield
+
+
+app = FastAPI(title="Repo Search Job Service", version="0.1.0", lifespan=lifespan)
 setup_observability(app, "job-service")
 
 REPOSITORY_HARVEST_JOB = "repository_harvest"
@@ -51,6 +66,17 @@ def job_from_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
         "finished_at": serialize_datetime(row[5]),
         "processed_records": row[6],
         "message": row[7],
+        "attempt_count": row[8] if len(row) > 8 else 0,
+        "heartbeat_at": serialize_datetime(row[9]) if len(row) > 9 else None,
+        "received_records": row[10] if len(row) > 10 else None,
+        "parsed_records": row[11] if len(row) > 11 else None,
+        "skipped_records": row[12] if len(row) > 12 else None,
+        "deleted_records": row[13] if len(row) > 13 else None,
+        "deactivated_records": row[14] if len(row) > 14 else None,
+        "unknown_tombstones": row[15] if len(row) > 15 else None,
+        "already_inactive_tombstones": row[16] if len(row) > 16 else None,
+        "invalid_tombstones": row[17] if len(row) > 17 else None,
+        "pages_processed": row[18] if len(row) > 18 else None,
     }
 
 
@@ -123,7 +149,19 @@ def ensure_schema() -> None:
                     started_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
                     finished_at TIMESTAMP WITHOUT TIME ZONE,
                     processed_records INTEGER,
+                    received_records INTEGER,
+                    parsed_records INTEGER,
+                    skipped_records INTEGER,
+                    deleted_records INTEGER,
+                    deactivated_records INTEGER,
+                    unknown_tombstones INTEGER,
+                    already_inactive_tombstones INTEGER,
+                    invalid_tombstones INTEGER,
+                    pages_processed INTEGER,
                     message TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    heartbeat_at TIMESTAMP WITHOUT TIME ZONE,
+                    lease_token TEXT,
                     acknowledged_at TIMESTAMP WITHOUT TIME ZONE,
                     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
@@ -132,6 +170,40 @@ def ensure_schema() -> None:
                     CONSTRAINT chk_admin_job_status
                         CHECK (status IN ('queued', 'running', 'succeeded', 'failed'))
                 );
+
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP WITHOUT TIME ZONE;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS lease_token TEXT;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS received_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS parsed_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS skipped_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS deleted_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS deactivated_records INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS unknown_tombstones INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS already_inactive_tombstones INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS invalid_tombstones INTEGER;
+                ALTER TABLE admin_job
+                    ADD COLUMN IF NOT EXISTS pages_processed INTEGER;
+
+                UPDATE admin_job
+                SET attempt_count = 0
+                WHERE attempt_count IS NULL;
+
+                ALTER TABLE admin_job
+                    ALTER COLUMN attempt_count SET DEFAULT 0;
+                ALTER TABLE admin_job
+                    ALTER COLUMN attempt_count SET NOT NULL;
 
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_queued_running_repository_harvest
                     ON admin_job (repository_id)
@@ -143,6 +215,10 @@ def ensure_schema() -> None:
 
                 CREATE INDEX IF NOT EXISTS idx_admin_job_recent
                     ON admin_job (job_type, repository_id, started_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_admin_job_stale_running
+                    ON admin_job (heartbeat_at)
+                    WHERE status = 'running';
                 """
             )
         conn.commit()
@@ -150,25 +226,24 @@ def ensure_schema() -> None:
         conn.close()
 
 
-@app.on_event("startup")
-def startup() -> None:
-    ensure_schema()
+def readiness_dependencies() -> dict[str, str]:
+    return {"database": check_database(get_connection)}
+
+
+@app.get("/live", response_model=LivenessResponse)
+def live() -> LivenessResponse:
+    return build_liveness_response()
+
+
+@app.get("/ready", response_model=ReadinessResponse, dependencies=[Depends(require_api_token)])
+def ready(response: Response) -> ReadinessResponse:
+    return build_readiness_response(response, readiness_dependencies())
 
 
 @app.get("/health", response_model=HealthResponse, dependencies=[Depends(require_api_token)])
 def health() -> HealthResponse:
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        database = "ok"
-    except Exception:
-        database = "unavailable"
-    finally:
-        conn.close()
-
-    return HealthResponse(status="ok", database=database)
+    dependencies = readiness_dependencies()
+    return build_health_response(dependencies["database"], dependencies)
 
 
 @app.get("/jobs", dependencies=[Depends(require_api_token)])
@@ -194,7 +269,10 @@ def jobs(
 
     sql = """
         SELECT id, job_type, repository_id, status, started_at, finished_at,
-               processed_records, message
+               processed_records, message, attempt_count, heartbeat_at,
+               received_records, parsed_records, skipped_records,
+               deleted_records, deactivated_records, unknown_tombstones,
+               already_inactive_tombstones, invalid_tombstones, pages_processed
         FROM admin_job
     """
 
@@ -238,7 +316,10 @@ def create_job(job_type: str, repository_id: int | None, message: str) -> dict[s
                 INSERT INTO admin_job (job_type, repository_id, status, message)
                 VALUES (%s, %s, 'queued', %s)
                 RETURNING id, job_type, repository_id, status, started_at, finished_at,
-                          processed_records, message
+                          processed_records, message, attempt_count, heartbeat_at,
+                          received_records, parsed_records, skipped_records,
+                          deleted_records, deactivated_records, unknown_tombstones,
+                          already_inactive_tombstones, invalid_tombstones, pages_processed
                 """,
                 (job_type, repository_id, message),
             )

@@ -1,6 +1,6 @@
 # Kubernetes lokalno pokretanje
 
-Ovo uputstvo je za pokretanje aplikacije na lokalnom Minikube Kubernetes klasteru.
+Ovo uputstvo je za primarno GPU pokretanje aplikacije na lokalnom Minikube Kubernetes klasteru. Normalna deployment putanja je `k8s-gpu/`; `k8s/` je samo eksplicitni CPU fallback za razvoj.
 
 ## 1. Preduslovi
 
@@ -9,7 +9,7 @@ Potrebno je:
 - Docker Desktop
 - Minikube
 - kubectl
-- NVIDIA driver ako se koristi GPU
+- NVIDIA driver i NVIDIA Container Runtime
 
 Instalacija Minikube-a i kubectl-a:
 
@@ -22,14 +22,7 @@ Pokrenuti Docker Desktop pre pokretanja Minikube-a.
 
 ## 2. Pokretanje Minikube klastera
 
-CPU verzija:
-
-```powershell
-minikube start --driver=docker --profile repo-search
-kubectl config use-context repo-search
-```
-
-GPU verzija:
+GPU verzija (primarna):
 
 U Docker Desktop-u proveriti da je NVIDIA runtime dostupan i postavljen kao default runtime. Otvoriti:
 
@@ -67,6 +60,13 @@ Provera da li Kubernetes vidi GPU:
 kubectl describe node repo-search | Select-String nvidia.com/gpu
 ```
 
+CPU fallback za razvoj se pokreće bez GPU prosleđivanja:
+
+```powershell
+minikube start --driver=docker --profile repo-search-cpu
+kubectl config use-context repo-search-cpu
+```
+
 ## 3. Build image-a unutar Minikube-a
 
 Usmeriti PowerShell na Minikube Docker daemon:
@@ -98,19 +98,31 @@ docker build -f frontend/Dockerfile -t repo-search-microservices-frontend:latest
 
 ## 4. Deploy
 
-CPU deploy:
-
-```powershell
-kubectl apply -k k8s/
-```
-
-GPU deploy:
+GPU deploy je primarna i samostalna komanda:
 
 ```powershell
 kubectl apply -k k8s-gpu/
 ```
 
-GPU overlay dodeljuje `nvidia.com/gpu` resurs za `embedding-service` i uključuje NVIDIA runtime za `ollama`.
+Ne primenjivati prvo `k8s/`, jer ga `k8s-gpu/` već uključuje kao bazu. Overlay zahteva CUDA za Embedding Service, uključuje `RuntimeClass nvidia` za Embedding Service i Ollama i dodaje DCGM exporter/Prometheus GPU metrike.
+
+Na lokalnom single-GPU klasteru NVIDIA time-slicing nije konfigurisan. Embedding Service zato jedini traži `nvidia.com/gpu: 1`; Ollama koristi isti uređaj preko NVIDIA runtime-a i `NVIDIA_VISIBLE_DEVICES=all`, bez drugog ekskluzivnog GPU zahteva. To je lokalna runtime podela, a ne Kubernetes-native resource sharing. Dva zahteva `nvidia.com/gpu: 1` na ovom node-u nisu dozvoljena jer bi jedan deployment ostao nezakazan.
+
+Eksplicitni CPU fallback za razvoj:
+
+```powershell
+kubectl apply -k k8s/
+```
+
+CPU fallback koristi `EMBEDDING_DEVICE=auto` i `GPU_REQUIRED=false`.
+
+Posle rollout-a i preuzimanja `gemma4:12b` pokrenuti reproduktivnu GPU proveru:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-gpu-deployment.ps1 -Mode Kubernetes -MinikubeProfile repo-search
+```
+
+Skripta proverava node GPU resurs, NVIDIA RuntimeClass, oba zakazana i spremna workload-a, Embedding Service CUDA/model status i stvaran embedding zahtev, stvaran `gemma4:12b` inference sa `ollama ps` GPU dokazom, kao i DCGM metrike u Prometheus-u. Tajne se ne ispisuju, a svaki obavezni neuspeh vraća nenulti exit kod.
 
 Ako su image-i rebuildovani sa istim `:latest` tagovima, restartovati deployment-e:
 
@@ -157,6 +169,16 @@ Proveriti podove:
 ```powershell
 kubectl -n repo-search get pods
 ```
+
+### Kreiranje prvog administratora
+
+Posle prvog pokretanja nove baze kreirati administratorski nalog u `auth-service` podu:
+
+```powershell
+kubectl -n repo-search exec -it deployment/auth-service -- python -m microservices.auth_service.bootstrap_admin
+```
+
+Lozinka se unosi interaktivno preko `getpass` i ne prikazuje se u izlazu. Komanda odbija ponovno kreiranje kada administrator već postoji. Javni registracioni API i `/admin/register` frontend ruta nisu dostupni.
 
 Prvo pokretanje može trajati duže jer Kubernetes pravi novi node, povlači bazne image-e,
 pokreće storage, pravi Postgres volume-e i učitava modele. Backend image je velik zbog
@@ -240,14 +262,18 @@ kubectl -n repo-search logs deployment/embedding-service -f
 kubectl -n repo-search logs deployment/job-worker -f
 ```
 
-Gateway health check:
+Gateway liveness, readiness i kompatibilna health provera:
 
 ```powershell
 kubectl -n repo-search port-forward service/gateway 8090:8000
+curl.exe http://localhost:8090/api/live
+curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/ready
 curl.exe -H "X-API-Key: replace_with_a_long_random_local_token" http://localhost:8090/api/health
 ```
 
-Ako se health check pozove bez `X-API-Key` header-a, odgovor `401 Unauthorized` je očekivan.
+`/api/live` bez autentifikacije potvrđuje samo da gateway proces odgovara. `/api/ready` zahteva `X-API-Key`, proverava auth, catalog, search i job servise i vraća HTTP 503 ako javna aplikacija nije spremna. `/api/health` je za kompatibilnost: zahteva token i uvek vraća HTTP 200, ali polje `status` i dalje pokazuje stvarno stanje, pa se ne koristi kao readiness signal. Interni servisi koriste iste semantike na `/live`, `/ready` i `/health` putanjama bez `/api` prefiksa.
+
+Query servis ostaje spreman i kada Ollama nije dostupna, jer tada koristi postojeći fallback parser. Ollama URL i dijagnostika ostaju dostupni, ali Ollama niti Query servis nisu startup preduslov za Search.
 
 Provera GPU-a u embedding podu:
 

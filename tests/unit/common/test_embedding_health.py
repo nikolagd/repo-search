@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+import importlib
+import sys
+from types import ModuleType
+from typing import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+API_TOKEN = "unit-test-api-token"
+AUTH_HEADERS = {"X-API-Key": API_TOKEN}
+
+
+class FakeEmbeddingModel:
+    def get_sentence_embedding_dimension(self) -> int:
+        return 1024
+
+    def encode(self, _text: str, *, normalize_embeddings: bool):
+        assert normalize_embeddings is True
+        return type("Vector", (), {"tolist": lambda self: [0.0] * 1024})()
+
+
+@pytest.fixture
+def embedding_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, ModuleType]]:
+    import microservices.embedding_service as embedding_service_package
+
+    main_module_name = "microservices.embedding_service.main"
+    model_module_name = "microservices.embedding_service.model"
+    previous_main = sys.modules.pop(main_module_name, None)
+
+    fake_model_module = ModuleType(model_module_name)
+    fake_model_module.MODEL_NAME = "unit-test-embedding-model"
+    fake_model_module.MODEL_REVISION = "unit-test-revision"
+    fake_model_module.REQUESTED_DEVICE = "auto"
+    fake_model_module.GPU_REQUIRED = False
+    fake_model_module.device = "cpu"
+    fake_model_module.model = FakeEmbeddingModel()
+    fake_model_module.initialization_error = None
+    fake_model_module.fail_warmup = False
+    fake_model_module.warmup_calls = 0
+    fake_model_module.require_calls = 0
+    fake_model_module.model_info_calls = []
+
+    def warm_up_embedding_model() -> None:
+        fake_model_module.warmup_calls += 1
+        if fake_model_module.fail_warmup:
+            fake_model_module.model = None
+            fake_model_module.device = None
+            fake_model_module.initialization_error = "embedding warmup failed"
+            raise RuntimeError("embedding warmup failed")
+
+    fake_model_module.warm_up_embedding_model = warm_up_embedding_model
+    def require_embedding_model() -> FakeEmbeddingModel | None:
+        fake_model_module.require_calls += 1
+        return fake_model_module.model
+
+    fake_model_module.require_embedding_model = require_embedding_model
+    fake_model_module.build_document_text = lambda title, abstract: f"{title or ''} {abstract or ''}".strip()
+    monkeypatch.setitem(sys.modules, model_module_name, fake_model_module)
+    monkeypatch.setattr(embedding_service_package, "model", fake_model_module)
+
+    module = importlib.import_module(main_module_name)
+    monkeypatch.setattr(
+        module,
+        "set_retrieval_model_info",
+        lambda *args, **kwargs: fake_model_module.model_info_calls.append((args, kwargs)),
+    )
+    try:
+        yield module, fake_model_module
+    finally:
+        sys.modules.pop(main_module_name, None)
+        if previous_main is not None:
+            sys.modules[main_module_name] = previous_main
+
+
+def test_embedding_readiness_tracks_successful_lightweight_startup(
+    embedding_service: tuple[ModuleType, ModuleType],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, fake_model_module = embedding_service
+    monkeypatch.setenv("API_TOKEN", API_TOKEN)
+    assert module.readiness_dependencies() == {"model": "unavailable"}
+
+    with TestClient(module.app) as client:
+        live = client.get("/live")
+        protected = client.get("/ready")
+        compatibility = client.get("/health", headers=AUTH_HEADERS)
+        after_startup = client.get("/ready", headers=AUTH_HEADERS)
+        model_status = client.get("/model/status", headers=AUTH_HEADERS)
+        document = client.post(
+            "/embed/document",
+            headers=AUTH_HEADERS,
+            json={"title": "Title", "abstract": "Abstract"},
+        )
+
+    assert live.status_code == 200
+    assert live.json() == {"status": "ok"}
+    assert protected.status_code == 401
+    assert compatibility.status_code == 200
+    assert compatibility.json() == {"status": "ok", "database": "not-used"}
+    assert after_startup.status_code == 200
+    assert after_startup.json() == {"status": "ok", "dependencies": {"model": "ok"}}
+    assert model_status.json()["embedding_device"] == "cpu"
+    assert model_status.json()["embedding_device_requested"] == "auto"
+    assert model_status.json()["embedding_gpu_required"] is False
+    assert model_status.json()["embedding_model_revision"] == "unit-test-revision"
+    assert model_status.json()["embedding_template_version"] == "e5-title-abstract-v1"
+    assert document.json()["embedding_model_revision"] == "unit-test-revision"
+    assert document.json()["embedding_template_version"] == "e5-title-abstract-v1"
+    assert fake_model_module.warmup_calls == 1
+    assert fake_model_module.require_calls == 2
+    assert fake_model_module.model_info_calls == [
+        (
+            (
+                "embedding-service",
+                "embedding_model",
+                {
+                    "model": "unit-test-embedding-model",
+                    "revision": "unit-test-revision",
+                    "template_version": "e5-title-abstract-v1",
+                    "device": "cpu",
+                    "dimension": 1024,
+                },
+            ),
+            {},
+        )
+    ]
+
+
+def test_embedding_readiness_remains_unavailable_after_failed_warmup(
+    embedding_service: tuple[ModuleType, ModuleType],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, fake_model_module = embedding_service
+    monkeypatch.setenv("API_TOKEN", API_TOKEN)
+    fake_model_module.fail_warmup = True
+
+    with pytest.raises(RuntimeError, match="embedding warmup failed"), TestClient(module.app):
+        pass
+
+    client = TestClient(module.app)
+    try:
+        response = client.get("/ready", headers=AUTH_HEADERS)
+        model_status = client.get("/model/status", headers=AUTH_HEADERS)
+    finally:
+        client.close()
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "dependencies": {"model": "unavailable"},
+    }
+    assert model_status.json()["embedding_device"] is None
+    assert model_status.json()["embedding_initialization_error"] == "embedding warmup failed"

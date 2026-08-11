@@ -18,6 +18,10 @@ data:
   SEARCH_SERVICE_URL: http://search-service:8000
   QUERY_SERVICE_URL: http://query-service:8000
   EMBEDDING_SERVICE_URL: http://embedding-service:8000
+  EMBEDDING_MODEL: intfloat/multilingual-e5-large
+  EMBEDDING_MODEL_REVISION: 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3
+  EMBEDDING_DEVICE: auto
+  GPU_REQUIRED: "false"
   JOB_SERVICE_URL: http://job-service:8000
   PROMETHEUS_URL: http://prometheus:9090
   LLM_PROVIDER: ollama
@@ -26,6 +30,9 @@ data:
   LLM_TIMEOUT: "180"
   LLM_WARMUP_ENABLED: "1"
   WORKER_POLL_INTERVAL_SECONDS: "5"
+  WORKER_HEARTBEAT_INTERVAL_SECONDS: "15"
+  WORKER_STALE_JOB_TIMEOUT_SECONDS: "120"
+  WORKER_MAX_ATTEMPTS: "3"
   METRICS_PORT: "9100"
   OTEL_TRACING_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
