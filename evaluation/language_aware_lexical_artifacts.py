@@ -286,6 +286,11 @@ def build_artifacts(
     expected_judgments_sha256: str,
     source_commit: str,
     starting_commit: str,
+    source_branch: str = "eval/lexical-query-coverage",
+    judgment_source_workbook_path: str | Path | None = None,
+    judgment_source_workbook_sha256: str | None = None,
+    judgment_source_workbook_valid_grade_count: int | None = None,
+    judgment_source_workbook_blank_count: int | None = None,
     limit: int = 20,
     depth: int = 5,
     seed: int = 2026,
@@ -297,6 +302,20 @@ def build_artifacts(
         raise ValueError("seed must be an integer")
     source_commit = _validate_commit(source_commit, label="source commit")
     starting_commit = _validate_commit(starting_commit, label="starting commit")
+    if not isinstance(source_branch, str) or not source_branch.strip():
+        raise ValueError("source branch must be a nonblank string")
+    if judgment_source_workbook_sha256 is not None:
+        _require_hash(
+            judgment_source_workbook_path,
+            judgment_source_workbook_sha256,
+            label="judgment source workbook",
+        )
+    for label, value in (
+        ("judgment source workbook valid grade count", judgment_source_workbook_valid_grade_count),
+        ("judgment source workbook blank count", judgment_source_workbook_blank_count),
+    ):
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"{label} must be a non-negative integer")
     query_hash = _require_hash(queries_path, expected_queries_sha256, label="query set")
     query_metadata_hash = _require_hash(
         query_metadata_path,
@@ -417,7 +436,7 @@ def build_artifacts(
             ),
             "source_commit": source_commit,
             "starting_commit": starting_commit,
-            "source_branch": "eval/language-aware-lexical",
+            "source_branch": source_branch,
             "corpus_size": len(publications),
             "query_count": len(queries),
             "corpus_snapshot_sha256": corpus_hash,
@@ -425,6 +444,21 @@ def build_artifacts(
             "query_metadata_sha256": query_metadata_hash,
             "frozen_runs_sha256": frozen_runs_hash,
             "judgments_sha256": judgments_hash,
+            "judgment_source_workbook": (
+                {
+                    "path": str(judgment_source_workbook_path)
+                    if judgment_source_workbook_path is not None
+                    else None,
+                    "sha256": judgment_source_workbook_sha256,
+                    "valid_grade_count": judgment_source_workbook_valid_grade_count,
+                    "blank_count": judgment_source_workbook_blank_count,
+                }
+                if judgment_source_workbook_path is not None
+                or judgment_source_workbook_sha256 is not None
+                or judgment_source_workbook_valid_grade_count is not None
+                or judgment_source_workbook_blank_count is not None
+                else None
+            ),
             "reused_run_record_sha256": {
                 method: _record_hash(frozen_runs, method) for method in REUSED_METHODS
             },
@@ -491,6 +525,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-judgments-sha256", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--starting-commit", required=True)
+    parser.add_argument("--source-branch", default="eval/lexical-query-coverage")
+    parser.add_argument("--judgment-source-workbook")
+    parser.add_argument("--judgment-source-workbook-sha256")
+    parser.add_argument("--judgment-source-workbook-valid-grade-count", type=int)
+    parser.add_argument("--judgment-source-workbook-blank-count", type=int)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--depth", type=int, default=5)
     parser.add_argument("--seed", type=int, default=2026)
@@ -509,6 +548,11 @@ def main(argv: list[str] | None = None) -> int:
         expected_judgments_sha256=args.expected_judgments_sha256,
         source_commit=args.source_commit,
         starting_commit=args.starting_commit,
+        source_branch=args.source_branch,
+        judgment_source_workbook_path=args.judgment_source_workbook,
+        judgment_source_workbook_sha256=args.judgment_source_workbook_sha256,
+        judgment_source_workbook_valid_grade_count=args.judgment_source_workbook_valid_grade_count,
+        judgment_source_workbook_blank_count=args.judgment_source_workbook_blank_count,
         limit=args.limit,
         depth=args.depth,
         seed=args.seed,

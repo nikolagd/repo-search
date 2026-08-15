@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 
 import pytest
 
@@ -8,9 +9,15 @@ from evaluation.adapters import (
     KeywordBaselineAdapter,
     LanguageAwareLexicalAdapter,
     LanguageIndependentLexicalAdapter,
+    build_language_aware_query_concepts,
+    distinct_language_aware_query_concepts,
     language_aware_analysis,
     language_aware_comparison_tokens,
+    language_aware_document_word_tokens,
     language_aware_lexical_metadata,
+    language_aware_stop_words,
+    matched_language_aware_concepts,
+    required_language_aware_concept_matches,
     VectorOnlyAdapter,
     language_independent_character_ngrams,
     language_independent_lexical_metadata,
@@ -218,6 +225,13 @@ def test_language_aware_analysis_preserves_repeated_source_occurrences() -> None
     assert english["comparison_tokens"] == ["ai", "ai"]
 
 
+def test_language_aware_analysis_does_not_multiply_variants_within_one_occurrence() -> None:
+    analysis = language_aware_analysis("Čačak", "serbian")
+
+    assert analysis["comparison_tokens"].count("čačak") == 1
+    assert analysis["comparison_tokens"].count("cacak") == 1
+
+
 def test_language_aware_serbian_cyrillic_and_latin_variants_match() -> None:
     corpus = [
         {"id": "cyr", "title": "Машинско учење", "abstract": None},
@@ -272,6 +286,115 @@ def test_language_aware_mixed_route_is_explicit_and_uses_both_stemmers() -> None
 
     assert "obrad" in tokens
     assert "applic" in tokens
+
+
+def test_language_aware_query_concepts_remove_function_words_but_keep_domain_terms() -> None:
+    concepts = build_language_aware_query_concepts(
+        "kako koji na koji način korišćenje",
+        "serbian",
+    )
+
+    assert [concept.source_token for concept in concepts] == ["korišćenje"]
+    assert "korišćenje" not in language_aware_stop_words("serbian")
+
+
+def test_language_aware_query_concepts_preserve_cyrillic_latin_and_diacritic_variants() -> None:
+    cyrillic = build_language_aware_query_concepts("машинско учење", "serbian")
+    latin = build_language_aware_query_concepts("masinsko ucenje", "serbian")
+
+    assert {variant for concept in cyrillic for variant in concept.variants} & {
+        "masinsko",
+        "ucenje",
+    }
+    latin_document = language_aware_document_word_tokens("masinsko ucenje", None, "serbian")
+    assert len(matched_language_aware_concepts(cyrillic, latin_document)) == 2
+
+
+def test_language_aware_query_concepts_use_serbian_and_english_stemming() -> None:
+    serbian = build_language_aware_query_concepts("učenja", "serbian")
+    english = build_language_aware_query_concepts("applications", "english")
+
+    assert serbian[0].key == "učenj"
+    assert english[0].key == "applic"
+
+
+def test_one_source_token_has_one_concept_and_no_character_gram_variants() -> None:
+    concepts = build_language_aware_query_concepts("Čačak", "serbian")
+    char_grams = set(language_independent_character_ngrams("Čačak"))
+
+    assert len(concepts) == 1
+    assert len(set(concepts[0].variants)) == len(concepts[0].variants)
+    assert "čačak" in concepts[0].variants
+    assert "cacak" in concepts[0].variants
+    assert char_grams.isdisjoint(concepts[0].variants)
+
+
+def test_repeated_query_concept_keys_count_once_for_coverage() -> None:
+    repeated = build_language_aware_query_concepts("učenje učenja", "serbian")
+    distinct = distinct_language_aware_query_concepts(repeated)
+    document_tokens = language_aware_document_word_tokens("Učenje", None, "serbian")
+
+    assert len(repeated) == 2
+    assert len(distinct) == 1
+    assert matched_language_aware_concepts(repeated, document_tokens) == {"učenj"}
+
+
+def test_character_ngrams_do_not_inflate_concept_coverage() -> None:
+    concepts = build_language_aware_query_concepts("digitalni repozitorijum", "serbian")
+    document_tokens = language_aware_document_word_tokens("digitalni", None, "serbian")
+
+    assert len(matched_language_aware_concepts(concepts, document_tokens)) == 1
+
+
+@pytest.mark.parametrize(
+    ("content_concepts", "required"),
+    [(1, 1), (2, 1), (3, 2), (4, 2), (5, 2), (6, 3)],
+)
+def test_language_aware_coverage_threshold_is_fixed(content_concepts: int, required: int) -> None:
+    assert required_language_aware_concept_matches(content_concepts) == required
+
+
+def test_language_aware_coverage_promotes_two_content_concepts_over_one() -> None:
+    corpus = [
+        {"id": "one", "title": "Korišćenje", "abstract": None},
+        {"id": "two", "title": "Korišćenje internet", "abstract": None},
+    ]
+    run = asyncio.run(
+        LanguageAwareLexicalAdapter(corpus).retrieve(
+            EvaluationQuery(
+                "synthetic",
+                "korišćenje internet platformi za učenje i nastavu",
+            ),
+            2,
+            query_metadata=_language_metadata("synthetic", "Serbian", "Latin"),
+        )
+    )
+
+    assert [item.publication_id for item in run.results] == ["two", "one"]
+
+
+def test_language_aware_coverage_backfill_and_ties_are_deterministic() -> None:
+    corpus = [
+        {"id": "2", "title": "korišćenje internet", "abstract": None},
+        {"id": "1", "title": "korišćenje", "abstract": None},
+    ]
+    query = EvaluationQuery("synthetic", "korišćenje internet platformi za učenje i nastavu")
+    metadata = _language_metadata("synthetic", "Serbian", "Latin")
+    adapter = LanguageAwareLexicalAdapter(corpus)
+    first = asyncio.run(adapter.retrieve(query, 2, query_metadata=metadata))
+    second = asyncio.run(adapter.retrieve(query, 2, query_metadata=metadata))
+
+    assert [item.publication_id for item in first.results] == ["2", "1"]
+    assert [(item.publication_id, item.score) for item in first.results] == [
+        (item.publication_id, item.score) for item in second.results
+    ]
+
+
+def test_language_aware_coverage_implementation_and_audit_do_not_read_grades() -> None:
+    from evaluation.language_aware_query_coverage import diagnose_top_five_coverage
+
+    assert "relevance" not in inspect.getsource(diagnose_top_five_coverage)
+    assert "q10" not in inspect.getsource(LanguageAwareLexicalAdapter.retrieve)
 
 
 def test_language_aware_short_terms_missing_abstracts_and_ties_are_deterministic() -> None:
@@ -336,7 +459,11 @@ def test_language_aware_metadata_records_stemmer_routing_and_fusion_completely()
     assert metadata["query_routing"]["source"].endswith("no LLM detection")
     assert metadata["precise_original_channel"]["folded_forms_replace_original"] is False
     assert metadata["fusion"]["k"] == 60
-    assert metadata["fusion"]["component_weights"].startswith("equal;")
+    assert metadata["fusion"]["component_weights"] == {
+        "precise_word_bm25": 1.0,
+        "language_aware_comparison_bm25": 1.0,
+        "character_4gram_bm25": 0.5,
+    }
     assert metadata["serbian_diacritic_insensitive_mapping"]["\u0111"] == "dj"
     assert metadata["comparison_channel"]["document_level_deduplication"] is False
     assert "repeated source-token occurrences remain repeated" in (
