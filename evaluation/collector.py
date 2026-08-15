@@ -5,7 +5,7 @@ import json
 import math
 import os
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +15,13 @@ from evaluation.adapters import (
     BM25BaselineAdapter,
     FullPipelineAdapter,
     KeywordBaselineAdapter,
+    LanguageAwareLexicalAdapter,
     LanguageIndependentLexicalAdapter,
     VectorOnlyAdapter,
 )
 from evaluation.corpus_audit import build_snapshot
 from evaluation.io import load_runs, validate_comparison_matrix, write_json
-from evaluation.models import EvaluationQuery, QueryRun
+from evaluation.models import EvaluationQuery, QueryMetadata, QueryRun
 from microservices.common.embedding_provenance import (
     DEFAULT_EMBEDDING_MODEL_REVISION,
     DOCUMENT_TEMPLATE_VERSION,
@@ -34,10 +35,17 @@ SUPPORTED_METHODS = (
     "keyword",
     "bm25",
     "language_independent_lexical",
+    "language_aware_lexical",
     "vector_only",
     "full_pipeline",
 )
 FINAL_METHODS = ("language_independent_lexical", "vector_only", "full_pipeline")
+EXTENDED_FINAL_METHODS = (
+    "language_independent_lexical",
+    "language_aware_lexical",
+    "vector_only",
+    "full_pipeline",
+)
 
 
 class CollectorError(RuntimeError):
@@ -367,6 +375,7 @@ async def collect_runs(
     *,
     corpus_store: ReadOnlyCorpusStore,
     service_client: EvaluationServiceClient,
+    query_metadata: Mapping[str, QueryMetadata] | None = None,
 ) -> list[QueryRun]:
     selected_methods = validate_methods(methods)
     if not queries:
@@ -375,6 +384,12 @@ async def collect_runs(
         raise CollectorError("limit must be between 1 and 50")
     if "full_pipeline" in selected_methods and any(len(query.text) > 1000 for query in queries):
         raise CollectorError("full-pipeline queries must not exceed 1000 characters")
+    if "language_aware_lexical" in selected_methods:
+        if query_metadata is None:
+            raise CollectorError("language-aware lexical collection requires query metadata")
+        missing = sorted({query.query_id for query in queries} - set(query_metadata))
+        if missing:
+            raise CollectorError(f"query metadata is missing query IDs: {missing}")
     await service_client.verify_model()
     frozen_publications = {str(publication["id"]): publication for publication in corpus_store.publications}
     if len(frozen_publications) != len(corpus_store.publications):
@@ -388,6 +403,8 @@ async def collect_runs(
         adapters["language_independent_lexical"] = LanguageIndependentLexicalAdapter(
             corpus_store.publications
         )
+    if "language_aware_lexical" in selected_methods:
+        adapters["language_aware_lexical"] = LanguageAwareLexicalAdapter(corpus_store.publications)
     if "vector_only" in selected_methods:
         adapters["vector_only"] = VectorOnlyAdapter(
             service_client.embed_query,
@@ -399,7 +416,14 @@ async def collect_runs(
     for query in queries:
         for method in selected_methods:
             try:
-                run = await adapters[method].retrieve(query, limit)
+                if method == "language_aware_lexical":
+                    run = await adapters[method].retrieve(
+                        query,
+                        limit,
+                        query_metadata=query_metadata[query.query_id],
+                    )
+                else:
+                    run = await adapters[method].retrieve(query, limit)
                 validate_collected_run(
                     run,
                     expected_query_id=query.query_id,
@@ -454,6 +478,7 @@ async def run_collection(
     embedding_model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
     embedding_template_version: str = DOCUMENT_TEMPLATE_VERSION,
     service_client: EvaluationServiceClient,
+    query_metadata: Mapping[str, QueryMetadata] | None = None,
     overwrite: bool = False,
 ) -> None:
     if expected_corpus_size <= 0:
@@ -477,7 +502,14 @@ async def run_collection(
             raise
         except Exception:
             raise CollectorError("database connection or corpus verification failed") from None
-        runs = await collect_runs(queries, methods, limit, corpus_store=store, service_client=service_client)
+        runs = await collect_runs(
+            queries,
+            methods,
+            limit,
+            corpus_store=store,
+            service_client=service_client,
+            query_metadata=query_metadata,
+        )
     finally:
         try:
             if store is not None:

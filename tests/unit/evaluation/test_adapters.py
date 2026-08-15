@@ -6,14 +6,21 @@ from evaluation.adapters import (
     BM25BaselineAdapter,
     FullPipelineAdapter,
     KeywordBaselineAdapter,
+    LanguageAwareLexicalAdapter,
     LanguageIndependentLexicalAdapter,
+    language_aware_analysis,
+    language_aware_comparison_tokens,
+    language_aware_lexical_metadata,
     VectorOnlyAdapter,
     language_independent_character_ngrams,
     language_independent_lexical_metadata,
     language_independent_word_tokens,
+    language_route,
+    normalize_serbian_latin,
+    normalize_serbian_latin_folded,
     tokenize,
 )
-from evaluation.models import EvaluationQuery
+from evaluation.models import EvaluationQuery, QueryMetadata
 
 
 def test_keyword_baseline_ranking_is_deterministic() -> None:
@@ -173,6 +180,124 @@ def test_language_independent_lexical_handles_short_query_and_missing_abstract()
     assert [item.publication_id for item in run.results] == ["1", "2"]
 
 
+def _language_metadata(query_id: str, language: str, script: str) -> QueryMetadata:
+    return QueryMetadata(query_id, language, script, "test", "test")
+
+
+def test_serbian_normalization_covers_precise_and_ascii_comparison_examples() -> None:
+    precise = normalize_serbian_latin(
+        "Milić Čačak veštačka učenje Đorđević машинско учење"
+    )
+    folded = normalize_serbian_latin_folded(
+        "Milić Čačak veštačka učenje Đorđević машинско учење"
+    )
+
+    assert precise == "milić čačak veštačka učenje đorđević mašinsko učenje"
+    assert folded == "milic cacak vestacka ucenje djordjevic masinsko ucenje"
+
+
+def test_language_aware_analysis_preserves_original_tokens_and_adds_folded_tokens() -> None:
+    analysis = language_aware_analysis("машинско учење", "serbian")
+
+    assert analysis["original_word_tokens"] == ["машинско", "учење"]
+    assert analysis["canonical_serbian_tokens"] == ["mašinsko", "učenje"]
+    assert analysis["diacritic_insensitive_tokens"] == ["masinsko", "ucenje"]
+    assert analysis["original_word_tokens"] != analysis["diacritic_insensitive_tokens"]
+    assert set(analysis["diacritic_insensitive_tokens"]).issubset(
+        set(analysis["comparison_tokens"])
+    )
+
+
+def test_language_aware_serbian_cyrillic_and_latin_variants_match() -> None:
+    corpus = [
+        {"id": "cyr", "title": "Машинско учење", "abstract": None},
+        {"id": "latin", "title": "masinsko ucenje", "abstract": None},
+        {"id": "other", "title": "Turizam", "abstract": None},
+    ]
+    run = asyncio.run(
+        LanguageAwareLexicalAdapter(corpus).retrieve(
+            EvaluationQuery("q1", "машинско учење"),
+            3,
+            query_metadata=_language_metadata("q1", "Serbian", "Cyrillic"),
+        )
+    )
+
+    assert {item.publication_id for item in run.results[:2]} == {"cyr", "latin"}
+
+
+def test_language_aware_stemming_routes_serbian_and_english_inflections() -> None:
+    serbian_tokens = language_aware_comparison_tokens("učenja", "serbian")
+    english_tokens = language_aware_comparison_tokens("applications", "english")
+
+    assert "učenj" in serbian_tokens
+    assert "applic" in english_tokens
+
+    corpus = [
+        {"id": "sr", "title": "Učenje", "abstract": None},
+        {"id": "en", "title": "Application", "abstract": None},
+    ]
+    sr_run = asyncio.run(
+        LanguageAwareLexicalAdapter(corpus).retrieve(
+            EvaluationQuery("q-sr", "učenja"),
+            2,
+            query_metadata=_language_metadata("q-sr", "Serbian", "Latin"),
+        )
+    )
+    en_run = asyncio.run(
+        LanguageAwareLexicalAdapter(corpus).retrieve(
+            EvaluationQuery("q-en", "applications"),
+            2,
+            query_metadata=_language_metadata("q-en", "English", "Latin"),
+        )
+    )
+
+    assert sr_run.results[0].publication_id == "sr"
+    assert en_run.results[0].publication_id == "en"
+
+
+def test_language_aware_mixed_route_is_explicit_and_uses_both_stemmers() -> None:
+    metadata = _language_metadata("q30", "Serbian_mixed", "Latin")
+    assert language_route(metadata) == "mixed"
+    tokens = language_aware_comparison_tokens("obradi applications", "mixed")
+
+    assert "obrad" in tokens
+    assert "applic" in tokens
+
+
+def test_language_aware_short_terms_missing_abstracts_and_ties_are_deterministic() -> None:
+    corpus = [
+        {"id": "2", "title": "AI", "abstract": None},
+        {"id": "1", "title": "AI", "abstract": ""},
+        {"id": "3", "title": "ML", "abstract": None},
+    ]
+    adapter = LanguageAwareLexicalAdapter(corpus)
+    query = EvaluationQuery("q1", "AI")
+    metadata = _language_metadata("q1", "English", "Latin")
+    first = asyncio.run(adapter.retrieve(query, 5, query_metadata=metadata))
+    second = asyncio.run(adapter.retrieve(query, 5, query_metadata=metadata))
+
+    assert [item.publication_id for item in first.results] == ["1", "2"]
+    assert [(item.publication_id, item.score) for item in first.results] == [
+        (item.publication_id, item.score) for item in second.results
+    ]
+
+
+def test_language_aware_does_not_treat_unrelated_words_as_synonyms() -> None:
+    assert not set(language_aware_comparison_tokens("učenje", "serbian")).intersection(
+        language_aware_comparison_tokens("turizam", "serbian")
+    )
+    run = asyncio.run(
+        LanguageAwareLexicalAdapter(
+            [{"id": "unrelated", "title": "Turizam", "abstract": None}]
+        ).retrieve(
+            EvaluationQuery("q1", "učenje"),
+            5,
+            query_metadata=_language_metadata("q1", "Serbian", "Latin"),
+        )
+    )
+    assert run.results == []
+
+
 def test_language_independent_metadata_is_complete_and_explicitly_non_cross_lingual() -> None:
     metadata = language_independent_lexical_metadata()
 
@@ -189,6 +314,22 @@ def test_language_independent_metadata_is_complete_and_explicitly_non_cross_ling
     assert metadata["semantic_components"] == []
     assert metadata["cross_lingual_retrieval"] is False
     assert metadata["cross_language_mapping"] is None
+
+
+def test_language_aware_metadata_records_stemmer_routing_and_fusion_completely() -> None:
+    metadata = language_aware_lexical_metadata()
+
+    assert metadata["method_id"] == "language_aware_lexical"
+    assert metadata["stemmer_library"] == "snowballstemmer"
+    assert metadata["stemmer_library_version"] == "3.1.1"
+    assert metadata["stemmer_algorithms"] == {"serbian": "serbian", "english": "english"}
+    assert metadata["query_routing"]["source"].endswith("no LLM detection")
+    assert metadata["precise_original_channel"]["folded_forms_replace_original"] is False
+    assert metadata["fusion"]["k"] == 60
+    assert metadata["fusion"]["component_weights"].startswith("equal;")
+    assert metadata["serbian_diacritic_insensitive_mapping"]["\u0111"] == "dj"
+    assert metadata["comparison_channel"]["synonyms"] is None
+    assert metadata["comparison_channel"]["lemmatization"] is None
 
 
 def test_vector_adapter_uses_original_query_and_existing_fetch_shape() -> None:

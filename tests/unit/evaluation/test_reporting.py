@@ -11,7 +11,7 @@ from evaluation.models import Judgment, QueryMetadata, QueryRun, RetrievedItem
 from evaluation.reporting import build_report, nearest_rank_percentile, write_report
 
 
-METHODS = ("keyword", "vector_only", "full_pipeline")
+METHODS = ("keyword", "language_aware_lexical", "vector_only", "full_pipeline")
 
 
 def _metadata():

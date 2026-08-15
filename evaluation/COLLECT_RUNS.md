@@ -6,6 +6,7 @@
 
 - `keyword` uses `KeywordBaselineAdapter` over the publication metadata loaded from the frozen database. Its existing NFKC/case-fold/token-frequency scoring and score-then-string-ID ordering are unchanged. It is an internal baseline, not a reproduction of DSpace, Google Scholar, PostgreSQL full-text ranking, or another search engine.
 - `language_independent_lexical` is the final candidate lexical comparator. It combines a Unicode word BM25 ranking and a within-word character 4-gram BM25 ranking using reciprocal-rank fusion with fixed `k=60`. Both components use pinned `bm25s==0.3.10`, its `lucene` variant, `k1=1.2`, `b=0.75`, separate title/abstract indexes, and `2.0 * title BM25 + abstract BM25`. It is not cross-lingual retrieval: it never translates or maps Serbian terms to English terms. Historical raw `bm25` remains selectable for reproduction.
+- `language_aware_lexical` is an evaluation-only extension. It retains the preceding method's precise original word and within-token character 4-gram channels and adds one equal-weight RRF component backed by a supplemental language-aware BM25 channel. It routes from query metadata (`language` and `script`) rather than LLM detection. Serbian routes canonicalize Cyrillic to precise Serbian Latin, add diacritic-insensitive Latin variants, and apply `snowballstemmer==3.1.1`'s Serbian algorithm. English routes apply its English algorithm. The explicit `Serbian_mixed` route applies both algorithms. Original precise tokens remain indexed; no synonyms, lemmatization, stop-word tuning, vector retrieval, or production search behavior is added.
 - `vector_only` sends the original query directly to Embedding Service `/embed/query`, never calls Query Service, and executes the shared production pgvector retrieval helper without years, phrases, boosts, candidate merging, or coverage logic. Evaluation adds `publication.id ASC` only as a deterministic equal-distance tie-breaker; production search keeps its existing tie behavior.
 - `full_pipeline` sends the exact query to Gateway `/api/search`. Gateway/Search/Query/Embedding services own parsing and ranking. The collector preserves returned order, scores, and `plan.parser_mode` and does not reimplement ranking.
 
@@ -21,6 +22,7 @@ The language-independent lexical method is a reproducible classic lexical baseli
 - `EVALUATION_API_TOKEN` by default, or the environment variable named by `--api-token-env`. It is sent only in `X-API-Key`.
 - Embedding Service base URL and Gateway `/api/search` URL as CLI arguments.
 - Expected corpus size, canonical corpus snapshot SHA-256, and active embedding model.
+- `--query-metadata` is required when `language_aware_lexical` is selected and must cover every query exactly.
 
 Database URLs, passwords, API tokens, JWTs, and administrator credentials are never written to runs, printed by the collector, or included in sanitized collector errors. JWT/admin credentials are not needed. Do not use `.local-artifacts/evaluation/credentials.local.txt`.
 
