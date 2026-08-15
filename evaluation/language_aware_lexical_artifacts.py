@@ -5,6 +5,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import random
 import re
 import time
 from collections import defaultdict
@@ -129,18 +130,24 @@ def _top_five_rows(
     publications: list[dict[str, Any]],
     *,
     depth: int,
+    seed: int,
 ) -> list[dict[str, Any]]:
+    if type(seed) is not int:
+        raise ValueError("seed must be an integer")
     query_texts = {query.query_id: query.text for query in queries}
     corpus = {str(publication["id"]): publication for publication in publications}
     rows: list[dict[str, Any]] = []
+    randomizer = random.Random(seed)
     for run in sorted(runs, key=lambda item: item.query_id):
-        for rank, item in enumerate(run.results[:depth], start=1):
+        query_rows: list[dict[str, Any]] = []
+        for item in run.results[:depth]:
             publication = corpus.get(item.publication_id)
             if publication is None:
                 raise ValueError(f"new run refers to an unknown publication: {item.publication_id}")
-            rows.append(
+            pair_key = f"{run.query_id}\0{item.publication_id}".encode("utf-8")
+            query_rows.append(
                 {
-                    "candidate_id": f"{run.query_id}-C{rank:04d}",
+                    "candidate_id": f"pair-{hashlib.sha256(pair_key).hexdigest()}",
                     "query_text": query_texts[run.query_id],
                     "query_id": run.query_id,
                     "publication_id": item.publication_id,
@@ -151,6 +158,8 @@ def _top_five_rows(
                     "relevance": "",
                 }
             )
+        randomizer.shuffle(query_rows)
+        rows.extend(query_rows)
     pairs = [(row["query_id"], row["publication_id"]) for row in rows]
     if len(pairs) != len(set(pairs)):
         raise ValueError("new language-aware top-five results contain duplicate query/publication pairs")
@@ -336,6 +345,7 @@ def build_artifacts(
         queries,
         publications,
         depth=depth,
+        seed=seed,
     )
     transfer_source_rows = [
         {
@@ -430,6 +440,13 @@ def build_artifacts(
             "top_k": limit,
             "pool_depth": depth,
             "pool_seed": seed,
+            "pool_order_policy": (
+                "query groups remain sorted by query_id; rows within each query are deterministically "
+                "shuffled with pool_seed so row order does not expose retrieval rank"
+            ),
+            "candidate_id_policy": (
+                "opaque SHA-256 pair id derived from query_id and publication_id; no method, rank, or score"
+            ),
             "top_five_position_count": overlap_report["top_five_positions"],
             "already_judged_count": overlap_report["already_judged_unique_pairs"],
             "new_unjudged_pair_count": overlap_report["new_unique_pairs"],

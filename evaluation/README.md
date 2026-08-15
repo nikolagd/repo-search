@@ -8,6 +8,12 @@ For historical reproduction, `python -m evaluation.bm25_artifacts` still builds 
 
 Post-assessment judgment import, detailed reporting, and optional assessor agreement are documented in `REPORTING.md`. Human relevance scoring remains mandatory; the code never creates or infers judgments.
 
+Evaluation-only dependency setup must be isolated from production requirements. From the repository root, install requirements-evaluation.txt in the evaluation or CI environment with:
+
+    python -m pip install -r requirements-evaluation.txt
+
+That file includes requirements-ci.txt, where snowballstemmer==3.1.1 is pinned. Do not install the evaluation requirements into a production image; requirements.txt intentionally contains no Snowball stemmer dependency.
+
 ## Methods
 
 - `keyword`: legacy deterministic token-frequency baseline. Text is Unicode NFKC-normalized and case-folded, then split into Unicode word tokens. The score remains `2 * title query-term frequency + abstract query-term frequency` for backward compatibility with historical frozen artifacts. It is not part of the final evaluation method set.
@@ -32,6 +38,8 @@ Schemas are in `schemas/`. Empty starting files are in `templates/`. Synthetic t
 Unjudged retrieved documents are treated as nonrelevant. A query with no positive judgments receives zero Recall, MRR, and nDCG; Precision is also zero unless a positively judged result exists. Such queries remain in macro averages and are counted explicitly as `queries_without_relevant_judgments`.
 
 Both candidate pooling and reporting expect exactly one run for every query and method. The backward-compatible default final methods remain `language_independent_lexical`, `vector_only`, and `full_pipeline`; pass `language_aware_lexical` explicitly for the fourth-method comparison. Historical `bm25` and legacy `keyword` remain explicit supported overrides. Duplicate method arguments and missing, duplicate, or unknown query/method runs are rejected, so pooling and every aggregate use the identical query set, including zero-result runs. Duplicate query IDs, judgments, retrieved publication IDs, ranks, gapped/non-one-based ranks, unknown query references, non-finite scores, and negative/non-finite latency are also rejected.
+
+The language-aware artifact generator blinds its top-five pool with deterministic opaque SHA-256 IDs derived only from the query_id/publication_id pair. Query groups remain together for practical scoring, while rows within each group are shuffled with the recorded seed; row order and candidate IDs do not expose retrieval rank.
 
 ## Metrics
 

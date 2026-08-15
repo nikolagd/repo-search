@@ -16,6 +16,16 @@ Keyword, BM25, and vector-only share one PostgreSQL `REPEATABLE READ`, `READ ONL
 
 The language-independent lexical method is a reproducible classic lexical baseline over the frozen local corpus. Unicode-aware analysis avoids hard-coding one language but adds no multilingual understanding or semantic equivalence. It is not claimed to reproduce Google Scholar or either source repository's DSpace/Solr configuration. Live RFOS/REPFF search is not used as the primary comparator because its indexes and configuration can change and raw scores cannot be merged across repositories.
 
+## Evaluation Analyzer And Dependencies
+
+The language-aware comparison channel emits each canonical, folded, or declared stem variant at most once per original source-token occurrence. Repeated source-token occurrences remain repeated; there is no document-level token deduplication, so BM25 term frequency and document length remain meaningful. The precise original word and character channels remain unchanged.
+
+Install the evaluation-only dependency set from the repository root with:
+
+    python -m pip install -r requirements-evaluation.txt
+
+The Snowball pin is intentionally kept in requirements-ci.txt and excluded from requirements.txt, which is used by production images.
+
 ## Required Runtime Configuration
 
 - `EVALUATION_DATABASE_URL` by default, or the environment variable named by `--database-url-env`. It must point to the same frozen primary database used by Search Service.

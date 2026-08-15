@@ -26,8 +26,8 @@ LANGUAGE_INDEPENDENT_LEXICAL_METHOD = "language_independent_lexical"
 LANGUAGE_INDEPENDENT_LEXICAL_VERSION = "1.0"
 LANGUAGE_INDEPENDENT_ANALYZER_VERSION = "unicode-word-char4-v1"
 LANGUAGE_AWARE_LEXICAL_METHOD = "language_aware_lexical"
-LANGUAGE_AWARE_LEXICAL_VERSION = "1.0"
-LANGUAGE_AWARE_ANALYZER_VERSION = "serbian-latin-comparison-snowball-v1"
+LANGUAGE_AWARE_LEXICAL_VERSION = "1.1"
+LANGUAGE_AWARE_ANALYZER_VERSION = "serbian-latin-comparison-snowball-occurrence-v2"
 CHAR_NGRAM_SIZE = 4
 RRF_K = 60
 SNOWBALL_LIBRARY = "snowballstemmer"
@@ -189,7 +189,12 @@ def language_aware_analysis(
     serbian_stemmer: Any | None = None,
     english_stemmer: Any | None = None,
 ) -> dict[str, list[str]]:
-    """Build precise and supplemental comparison tokens for one fixed route."""
+    """Build precise and occurrence-preserving comparison tokens for one route.
+
+    Each original source-token occurrence contributes at most one copy of each
+    normalized variant. Repeated source-token occurrences remain repeated so
+    BM25 term frequency and document length remain meaningful.
+    """
 
     if route not in _SUPPORTED_LANGUAGE_ROUTES:
         raise ValueError(f"unsupported language-aware route: {route!r}")
@@ -204,24 +209,31 @@ def language_aware_analysis(
     stemmed_tokens: list[str] = []
     comparison_tokens: list[str] = []
 
-    def append_unique(values: Iterable[str]) -> None:
-        for value in values:
-            if value and value not in comparison_tokens:
-                comparison_tokens.append(value)
+    for original_token in original_tokens:
+        canonical_variants = serbian_latin_word_tokens(original_token)
+        folded_variants = serbian_latin_folded_word_tokens(original_token)
+        variants: list[str] = []
+        if route in {"serbian", "mixed"}:
+            variants.extend(canonical_variants)
+            variants.extend(folded_variants)
+            serbian_stems = _stem_tokens(canonical_variants, serbian_stemmer)
+            stemmed_tokens.extend(serbian_stems)
+            variants.extend(serbian_stems)
+        if route == "english":
+            variants.append(original_token)
+            english_stems = _stem_tokens([original_token], english_stemmer)
+            stemmed_tokens.extend(english_stems)
+            variants.extend(english_stems)
+        elif route == "mixed":
+            english_stems = _stem_tokens([original_token], english_stemmer)
+            stemmed_tokens.extend(english_stems)
+            variants.extend(english_stems)
 
-    if route in {"serbian", "mixed"}:
-        append_unique(canonical_tokens)
-        append_unique(folded_tokens)
-        stemmed_tokens.extend(_stem_tokens(canonical_tokens, serbian_stemmer))
-        append_unique(stemmed_tokens)
-    if route == "english":
-        append_unique(original_tokens)
-        stemmed_tokens.extend(_stem_tokens(original_tokens, english_stemmer))
-        append_unique(stemmed_tokens)
-    elif route == "mixed":
-        english_stems = _stem_tokens(original_tokens, english_stemmer)
-        stemmed_tokens.extend(english_stems)
-        append_unique(english_stems)
+        occurrence_seen: set[str] = set()
+        for value in variants:
+            if value and value not in occurrence_seen:
+                comparison_tokens.append(value)
+                occurrence_seen.add(value)
 
     return {
         "original_word_tokens": original_tokens,
@@ -803,6 +815,11 @@ def language_aware_lexical_metadata(
                 "diacritic_insensitive_serbian_latin_tokens",
                 "declared_language_stems",
             ],
+            "token_occurrence_policy": (
+                "one copy of each normalized variant per original source-token occurrence; "
+                "repeated source-token occurrences remain repeated"
+            ),
+            "document_level_deduplication": False,
             "synonyms": None,
             "lemmatization": None,
             "stop_words": None,

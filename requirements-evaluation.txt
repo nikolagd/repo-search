@@ -1,0 +1,2 @@
+# Evaluation-only environment. Production images must continue using requirements.txt.
+-r requirements-ci.txt

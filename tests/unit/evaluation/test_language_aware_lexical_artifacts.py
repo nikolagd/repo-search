@@ -13,7 +13,7 @@ def _write(path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _inputs(tmp_path):
+def _inputs(tmp_path, *, rich=False):
     tmp_path.mkdir(parents=True, exist_ok=True)
     queries = tmp_path / "queries.json"
     metadata = tmp_path / "query-metadata.json"
@@ -37,7 +37,7 @@ def _inputs(tmp_path):
         },
         {
             "publication_id": "p3",
-            "title": "Unrelated",
+            "title": "Application Učenje" if rich else "Unrelated",
             "abstract": None,
             "date": "2020-01-01T00:00:00",
             "source_url": "https://example.test/p3",
@@ -106,8 +106,8 @@ def _inputs(tmp_path):
     return queries, metadata, snapshot, frozen, judgments
 
 
-def _build(tmp_path, name):
-    queries, metadata, snapshot, frozen, judgments = _inputs(tmp_path)
+def _build(tmp_path, name, *, depth=1, seed=2026, limit=2, rich=False):
+    queries, metadata, snapshot, frozen, judgments = _inputs(tmp_path, rich=rich)
     output = tmp_path / name
     build_artifacts(
         queries_path=queries,
@@ -123,9 +123,9 @@ def _build(tmp_path, name):
         expected_judgments_sha256=sha256_file(judgments),
         source_commit=SOURCE_COMMIT,
         starting_commit=START_COMMIT,
-        limit=2,
-        depth=1,
-        seed=2026,
+        limit=limit,
+        depth=depth,
+        seed=seed,
         generated_at="2026-08-15T12:00:00+00:00",
     )
     return output
@@ -158,6 +158,8 @@ def test_artifacts_generate_only_new_rankings_and_transfer_by_stable_pair(tmp_pa
     metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["selected_language_aware_lexical"]["stemmer_library"] == "snowballstemmer"
     assert metadata["new_unjudged_pair_count"] == 1
+    assert metadata["pool_seed"] == 2026
+    assert "row order does not expose retrieval rank" in metadata["pool_order_policy"]
     assert metadata["generated_artifact_sha256"]["new_unjudged_candidates"] == sha256_file(
         output / "new-unjudged-candidates.csv"
     )
@@ -172,3 +174,30 @@ def test_language_aware_artifact_generation_is_deterministic_except_latency(tmp_
         for row in payload["runs"]:
             row.pop("latency_ms")
     assert first_runs == second_runs
+
+
+def test_artifact_pool_uses_opaque_pair_ids_and_seeded_within_query_order(tmp_path) -> None:
+    first = _build(tmp_path / "seed-2026", "out", depth=2, seed=2026, limit=3, rich=True)
+    second = _build(tmp_path / "seed-2028", "out", depth=2, seed=2028, limit=3, rich=True)
+    first_rows = list(
+        csv.DictReader((first / "top-five-candidates.csv").open(encoding="utf-8"))
+    )
+    second_rows = list(
+        csv.DictReader((second / "top-five-candidates.csv").open(encoding="utf-8"))
+    )
+
+    first_ids = {row["candidate_id"] for row in first_rows}
+    second_ids = {row["candidate_id"] for row in second_rows}
+    assert first_ids == second_ids
+    assert all(candidate_id.startswith("pair-") for candidate_id in first_ids)
+    assert all("-C" not in candidate_id for candidate_id in first_ids)
+    assert all(
+        query_id not in candidate_id
+        for query_id in ("q1", "q2")
+        for candidate_id in first_ids
+    )
+    assert [row["candidate_id"] for row in first_rows] != [
+        row["candidate_id"] for row in second_rows
+    ]
+    assert [row["query_id"] for row in first_rows] == ["q1", "q1", "q2", "q2"]
+    assert [row["query_id"] for row in second_rows] == ["q1", "q1", "q2", "q2"]

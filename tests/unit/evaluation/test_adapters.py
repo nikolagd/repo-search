@@ -208,6 +208,16 @@ def test_language_aware_analysis_preserves_original_tokens_and_adds_folded_token
     )
 
 
+def test_language_aware_analysis_preserves_repeated_source_occurrences() -> None:
+    serbian = language_aware_analysis("učenje učenje", "serbian")
+    assert serbian["comparison_tokens"].count("učenje") == 2
+    assert serbian["comparison_tokens"].count("ucenje") == 2
+    assert serbian["comparison_tokens"].count("učenj") == 2
+
+    english = language_aware_analysis("AI AI", "english")
+    assert english["comparison_tokens"] == ["ai", "ai"]
+
+
 def test_language_aware_serbian_cyrillic_and_latin_variants_match() -> None:
     corpus = [
         {"id": "cyr", "title": "Машинско учење", "abstract": None},
@@ -328,6 +338,10 @@ def test_language_aware_metadata_records_stemmer_routing_and_fusion_completely()
     assert metadata["fusion"]["k"] == 60
     assert metadata["fusion"]["component_weights"].startswith("equal;")
     assert metadata["serbian_diacritic_insensitive_mapping"]["\u0111"] == "dj"
+    assert metadata["comparison_channel"]["document_level_deduplication"] is False
+    assert "repeated source-token occurrences remain repeated" in (
+        metadata["comparison_channel"]["token_occurrence_policy"]
+    )
     assert metadata["comparison_channel"]["synonyms"] is None
     assert metadata["comparison_channel"]["lemmatization"] is None
 
