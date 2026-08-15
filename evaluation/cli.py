@@ -123,6 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect = commands.add_parser("collect-runs", help="collect BM25, vector-only, and full-pipeline runs")
     collect.add_argument("--queries", required=True)
+    collect.add_argument(
+        "--query-metadata",
+        help="query metadata JSON; required when language_aware_lexical is selected",
+    )
     collect.add_argument("--output", required=True)
     collect.add_argument("--methods", nargs="+", default=list(FINAL_METHODS))
     collect.add_argument("--limit", type=int, default=20)
@@ -146,6 +150,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             queries = load_queries(args.queries)
             validate_methods(args.methods)
+            query_metadata = None
+            if "language_aware_lexical" in args.methods:
+                if not args.query_metadata:
+                    raise CollectorError(
+                        "--query-metadata is required when language_aware_lexical is selected"
+                    )
+                query_metadata = {
+                    item.query_id: item
+                    for item in load_query_metadata(args.query_metadata, {query.query_id for query in queries})
+                }
         except (CollectorError, ValueError) as exc:
             raise SystemExit(str(exc)) from None
         if args.limit <= 0 or args.limit > 50:
@@ -190,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
                     embedding_model_revision=args.embedding_model_revision,
                     embedding_template_version=args.embedding_template_version,
                     service_client=service_client,
+                    query_metadata=query_metadata,
                     overwrite=args.overwrite,
                 )
             )

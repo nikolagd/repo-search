@@ -6,6 +6,7 @@
 
 - `keyword` uses `KeywordBaselineAdapter` over the publication metadata loaded from the frozen database. Its existing NFKC/case-fold/token-frequency scoring and score-then-string-ID ordering are unchanged. It is an internal baseline, not a reproduction of DSpace, Google Scholar, PostgreSQL full-text ranking, or another search engine.
 - `language_independent_lexical` is the final candidate lexical comparator. It combines a Unicode word BM25 ranking and a within-word character 4-gram BM25 ranking using reciprocal-rank fusion with fixed `k=60`. Both components use pinned `bm25s==0.3.10`, its `lucene` variant, `k1=1.2`, `b=0.75`, separate title/abstract indexes, and `2.0 * title BM25 + abstract BM25`. It is not cross-lingual retrieval: it never translates or maps Serbian terms to English terms. Historical raw `bm25` remains selectable for reproduction.
+- `language_aware_lexical` is an evaluation-only extension. It retains the preceding method's precise original word and within-token character 4-gram channels and adds one supplemental language-aware BM25 channel. It routes from query metadata (`language` and `script`) rather than LLM detection. Serbian routes canonicalize Cyrillic to precise Serbian Latin, add diacritic-insensitive Latin variants, and apply `snowballstemmer==3.1.1`'s Serbian algorithm. English routes apply its English algorithm. The explicit `Serbian_mixed` route applies both algorithms. Coverage uses fixed versioned Serbian and English function-word sets only for distinct word concepts, never character n-grams; primary candidates meet the fixed `1`/`ceil(0.4 * concept_count)` threshold and deterministic below-threshold backfill is used only when needed. Weighted RRF is precise word `1.0`, language-aware comparison `1.0`, and character 4-gram `0.5` with `k=60`. Original precise tokens remain indexed; no synonyms, lemmatization, vector retrieval, or production search behavior is added.
 - `vector_only` sends the original query directly to Embedding Service `/embed/query`, never calls Query Service, and executes the shared production pgvector retrieval helper without years, phrases, boosts, candidate merging, or coverage logic. Evaluation adds `publication.id ASC` only as a deterministic equal-distance tie-breaker; production search keeps its existing tie behavior.
 - `full_pipeline` sends the exact query to Gateway `/api/search`. Gateway/Search/Query/Embedding services own parsing and ranking. The collector preserves returned order, scores, and `plan.parser_mode` and does not reimplement ranking.
 
@@ -15,12 +16,25 @@ Keyword, BM25, and vector-only share one PostgreSQL `REPEATABLE READ`, `READ ONL
 
 The language-independent lexical method is a reproducible classic lexical baseline over the frozen local corpus. Unicode-aware analysis avoids hard-coding one language but adds no multilingual understanding or semantic equivalence. It is not claimed to reproduce Google Scholar or either source repository's DSpace/Solr configuration. Live RFOS/REPFF search is not used as the primary comparator because its indexes and configuration can change and raw scores cannot be merged across repositories.
 
+## Evaluation Analyzer And Dependencies
+
+The language-aware comparison channel emits each canonical, folded, or declared stem variant at most once per original source-token occurrence. Repeated source-token occurrences remain repeated; there is no document-level token deduplication, so BM25 term frequency and document length remain meaningful. The precise original word and character channels remain unchanged.
+
+The coverage analyzer creates one group for each original non-stopword query token, retaining precise, canonical/folded, and route-specific stem variants. Duplicate concept identities count once for distinct coverage; the exact raw and normalized function-word sets plus their SHA-256 are emitted by `language_aware_lexical_metadata`. Character 4-grams never create concepts.
+
+Install the evaluation-only dependency set from the repository root with:
+
+    python -m pip install -r requirements-evaluation.txt
+
+The Snowball pin is intentionally kept in requirements-ci.txt and excluded from requirements.txt, which is used by production images.
+
 ## Required Runtime Configuration
 
 - `EVALUATION_DATABASE_URL` by default, or the environment variable named by `--database-url-env`. It must point to the same frozen primary database used by Search Service.
 - `EVALUATION_API_TOKEN` by default, or the environment variable named by `--api-token-env`. It is sent only in `X-API-Key`.
 - Embedding Service base URL and Gateway `/api/search` URL as CLI arguments.
 - Expected corpus size, canonical corpus snapshot SHA-256, and active embedding model.
+- `--query-metadata` is required when `language_aware_lexical` is selected and must cover every query exactly.
 
 Database URLs, passwords, API tokens, JWTs, and administrator credentials are never written to runs, printed by the collector, or included in sanitized collector errors. JWT/admin credentials are not needed. Do not use `.local-artifacts/evaluation/credentials.local.txt`.
 

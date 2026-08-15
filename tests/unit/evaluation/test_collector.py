@@ -22,7 +22,7 @@ from evaluation.collector import (
 )
 from evaluation.corpus_audit import build_snapshot
 from evaluation.io import load_queries, load_runs
-from evaluation.models import EvaluationQuery, QueryRun, RetrievedItem
+from evaluation.models import EvaluationQuery, QueryMetadata, QueryRun, RetrievedItem
 from microservices.common.embedding_provenance import (
     DEFAULT_EMBEDDING_MODEL_REVISION,
     DOCUMENT_TEMPLATE_VERSION,
@@ -323,8 +323,40 @@ def test_incomplete_matrix_and_unknown_method_fail_before_output(tmp_path) -> No
 def test_final_method_set_uses_language_independent_lexical_and_retains_historical_methods() -> None:
     assert FINAL_METHODS == ("language_independent_lexical", "vector_only", "full_pipeline")
     assert validate_methods(FINAL_METHODS) == list(FINAL_METHODS)
+    assert validate_methods(["language_aware_lexical"]) == ["language_aware_lexical"]
     assert validate_methods(["keyword"]) == ["keyword"]
     assert validate_methods(["bm25"]) == ["bm25"]
+
+
+def test_language_aware_collection_requires_and_uses_declared_query_metadata() -> None:
+    query = EvaluationQuery("q1", "shared term")
+    metadata = {
+        "q1": QueryMetadata("q1", "English", "Latin", "test", "shared term")
+    }
+    runs = asyncio.run(
+        collect_runs(
+            [query],
+            ["language_aware_lexical"],
+            10,
+            corpus_store=FakeCorpusStore(),
+            service_client=FakeServiceClient(),
+            query_metadata=metadata,
+        )
+    )
+
+    assert len(runs) == 1
+    assert runs[0].method == "language_aware_lexical"
+    assert [item.publication_id for item in runs[0].results] == ["1", "2"]
+    with pytest.raises(CollectorError, match="requires query metadata"):
+        asyncio.run(
+            collect_runs(
+                [query],
+                ["language_aware_lexical"],
+                10,
+                corpus_store=FakeCorpusStore(),
+                service_client=FakeServiceClient(),
+            )
+        )
 
 
 def test_empty_queries_invalid_limits_and_oversized_pipeline_query_fail_early() -> None:

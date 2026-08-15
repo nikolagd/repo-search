@@ -1,6 +1,6 @@
 # Search Evaluation Foundation
 
-This package compares three retrieval methods without supplying evaluation topics, relevance judgments, or thesis results. Files in `templates/` are intentionally empty. Real queries and judgments must be created and reviewed separately.
+This package compares the frozen three-method evaluation plus an opt-in language-aware lexical fourth method without supplying evaluation topics, relevance judgments, or thesis results. Files in `templates/` are intentionally empty. Real queries and judgments must be created and reviewed separately.
 
 Production run collection is documented in `COLLECT_RUNS.md` and available through `python -m evaluation collect-runs`.
 
@@ -8,11 +8,18 @@ For historical reproduction, `python -m evaluation.bm25_artifacts` still builds 
 
 Post-assessment judgment import, detailed reporting, and optional assessor agreement are documented in `REPORTING.md`. Human relevance scoring remains mandatory; the code never creates or infers judgments.
 
+Evaluation-only dependency setup must be isolated from production requirements. From the repository root, install requirements-evaluation.txt in the evaluation or CI environment with:
+
+    python -m pip install -r requirements-evaluation.txt
+
+That file includes requirements-ci.txt, where snowballstemmer==3.1.1 is pinned. Do not install the evaluation requirements into a production image; requirements.txt intentionally contains no Snowball stemmer dependency.
+
 ## Methods
 
 - `keyword`: legacy deterministic token-frequency baseline. Text is Unicode NFKC-normalized and case-folded, then split into Unicode word tokens. The score remains `2 * title query-term frequency + abstract query-term frequency` for backward compatibility with historical frozen artifacts. It is not part of the final evaluation method set.
 - `bm25`: historical raw lexical comparator. `bm25s==0.3.10` supplies Lucene-style BM25 scoring with `k1=1.2` and `b=0.75`. It remains available for exact reproduction of the earlier pool.
 - `language_independent_lexical`: final candidate lexical comparator. It fuses a Unicode word BM25 rank and a within-word character 4-gram BM25 rank using reciprocal-rank fusion with fixed `k=60`. Each component retains `k1=1.2`, `b=0.75`, and `2.0 * title BM25 + abstract BM25`. It is language-independent only in preprocessing: there is no translation, transliteration, semantic equivalence, stemming, lemmatization, or stop-word list. A Serbian query ordinarily cannot retrieve an English-only document unless they share surface forms.
+- `language_aware_lexical`: evaluation-only extension of the preceding comparator. It retains the precise original word and within-token character 4-gram channels and adds one language-aware BM25 rank channel. Serbian routes use declared query metadata (`language` and `script`) for canonical Cyrillic-to-Latin comparison, diacritic-insensitive Serbian Latin variants, and the pinned Snowball Serbian stemmer. English routes use the pinned Snowball English stemmer. The one `Serbian_mixed` route applies both stemmers deterministically. Its label-blind query-concept gate uses fixed versioned Serbian/English function-word sets, requires `1` match for one or two concepts and `ceil(0.4 * concept_count)` otherwise, and deterministically backfills below-threshold lexical candidates when necessary. Weighted RRF contributions are precise word `1.0`, language-aware comparison `1.0`, and character 4-gram `0.5`, with `k=60`. The exact normalized stop-word sets, hash, concept policy, and threshold are recorded in method metadata. No synonyms, lemmatization, vector retrieval, or LLM language detection is used.
 - `vector_only`: embeds the original query once and invokes the existing vector-fetch boundary with no LLM parsing, phrase boosts, candidate merging, or query-coverage boost. Its embedder and fetcher are injected, which permits deterministic tests and use with the existing Search/Embedding service functions.
 - `full_pipeline`: consumes the application Search Service response, including final scores and `plan.parser_mode`. Tests inject a deterministic service callable, so Ollama is never contacted.
 
@@ -30,7 +37,9 @@ Schemas are in `schemas/`. Empty starting files are in `templates/`. Synthetic t
 
 Unjudged retrieved documents are treated as nonrelevant. A query with no positive judgments receives zero Recall, MRR, and nDCG; Precision is also zero unless a positively judged result exists. Such queries remain in macro averages and are counted explicitly as `queries_without_relevant_judgments`.
 
-Both candidate pooling and reporting expect exactly one run for every query and method. Default final methods are `language_independent_lexical`, `vector_only`, and `full_pipeline`; override them with `--methods`. Historical `bm25` and legacy `keyword` remain explicit supported overrides. Duplicate method arguments and missing, duplicate, or unknown query/method runs are rejected, so pooling and every aggregate use the identical query set, including zero-result runs. Duplicate query IDs, judgments, retrieved publication IDs, ranks, gapped/non-one-based ranks, unknown query references, non-finite scores, and negative/non-finite latency are also rejected.
+Both candidate pooling and reporting expect exactly one run for every query and method. The backward-compatible default final methods remain `language_independent_lexical`, `vector_only`, and `full_pipeline`; pass `language_aware_lexical` explicitly for the fourth-method comparison. Historical `bm25` and legacy `keyword` remain explicit supported overrides. Duplicate method arguments and missing, duplicate, or unknown query/method runs are rejected, so pooling and every aggregate use the identical query set, including zero-result runs. Duplicate query IDs, judgments, retrieved publication IDs, ranks, gapped/non-one-based ranks, unknown query references, non-finite scores, and negative/non-finite latency are also rejected.
+
+The language-aware artifact generator blinds its top-five pool with deterministic opaque SHA-256 IDs derived only from the query_id/publication_id pair. Query groups remain together for practical scoring, while rows within each group are shuffled with the recorded seed; row order and candidate IDs do not expose retrieval rank. The query-concept coverage audit is label-blind and reads only frozen queries, metadata, corpus text, and retrieved rows.
 
 ## Metrics
 
@@ -48,6 +57,12 @@ Create a deterministic, method-blind assessment pool. The output intentionally c
 
 ```powershell
 .\.venv\Scripts\python.exe -m evaluation candidate-pool --queries path\to\queries.json --runs path\to\runs.json --output path\to\candidates.csv --depth 10 --seed 2026 --methods language_independent_lexical vector_only full_pipeline
+```
+
+Collect the language-aware method only with the frozen query metadata:
+
+```powershell
+.\.venv\Scripts\python.exe -m evaluation collect-runs --queries path\to\queries.json --query-metadata path\to\query-metadata.json --output path\to\runs.json --methods language_aware_lexical --limit 20 ...
 ```
 
 After manual judgments have been completed, export the assessment sheet as UTF-8 CSV and validate/import it:
