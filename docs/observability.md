@@ -1,4 +1,4 @@
-# Observability
+# Opservabilnost
 
 Ovaj sloj počinje metrikama performansi mikroservisa i lokalnim Grafana stack-om.
 

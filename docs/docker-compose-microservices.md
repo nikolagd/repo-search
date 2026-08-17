@@ -1,4 +1,4 @@
-# Docker Compose microservices deployment
+# Pokretanje mikroservisa kroz Docker Compose
 
 Ovo uputstvo je arhivirano zato što je GPU Kubernetes deployment sada primarni način pokretanja. Docker Compose zadržava GPU kao obavezan režim za lokalni smoke test, debugging ili poređenje sa Kubernetes manifestima.
 

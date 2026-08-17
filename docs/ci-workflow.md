@@ -1,4 +1,4 @@
-# GitHub Actions CI workflow
+# GitHub Actions CI proces
 
 Ovaj dokument opisuje CI proces za projekat `repo-search`. Workflow je definisan u fajlu `.github/workflows/ci.yml` i namenjen je javnom GitHub repozitorijumu.
 

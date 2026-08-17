@@ -1,46 +1,23 @@
-# Runtime performance measurement
+# Merenje performansi tokom izvršavanja
 
-This package provides reproducible tooling for later search-latency, Prometheus
-resource, and embedding-backfill measurements. It is separate from relevance
-evaluation and does not change search, ranking, embedding, or job behavior. Its
-synthetic tests and implementation are not thesis performance results.
+Ovaj paket pruža ponovljive alate za merenje vremena pretrage, resursa preko Prometheus-a i embedding backfill obrade. Odvojen je od evaluacije relevantnosti i ne menja ponašanje pretrage, rangiranja, embedding-a niti pozadinskih poslova. Sintetički testovi i sama implementacija nisu rezultati merenja koji se mogu neposredno koristiti u master radu.
 
-## Identity model and mandatory preflight
+## Model identiteta i obavezna provera pre merenja
 
-Every command performs runtime identity verification before a measurement timer,
-Prometheus query, or backfill creation. Reports keep four concepts separate:
+Svaka komanda proverava identitet pokrenutog sistema pre pokretanja tajmera, Prometheus upita ili pravljenja backfill posla. Izveštaji odvojeno čuvaju četiri pojma:
 
-- `runner_git_commit` is the commit of the checkout executing this CLI. It is not
-  evidence of what is deployed.
-- `verified_deployment_identity` comes from a required, separately captured and
-  SHA-256-hashed deployment-evidence file. It records the deployed Git revision,
-  immutable image digests, runtime kind, evidence timestamp, and whether the
-  deployed revision matches the runner.
-- `configured_expectations` are the model name, embedding revision/template, and
-  LLM model requested by the measurement config.
-- `observed_runtime_model_identity` contains only those four observed runtime
-  fields plus the UTC verification timestamp.
+- `runner_git_commit` je commit radne kopije koja izvršava CLI. On nije dokaz o verziji koja je postavljena u okruženju.
+- `verified_deployment_identity` potiče iz obavezne, odvojeno napravljene datoteke sa dokazom deployment-a i njenim SHA-256 hash-om. Beleži postavljenu Git reviziju, nepromenljive image digest vrednosti, vrstu runtime-a, vreme prikupljanja dokaza i podatak da li postavljena revizija odgovara programu koji pokreće merenje.
+- `configured_expectations` sadrži naziv modela, embedding revision/template i LLM model zadate u konfiguraciji merenja.
+- `observed_runtime_model_identity` sadrži samo četiri opažena polja identiteta modela i UTC vreme njihove provere.
 
-For microservices, the preflight authenticates with `X-API-Key` to configurable
-Query Service and Embedding Service `/model/status` URLs. It compares Query
-Service `llm_model` and Embedding Service `embedding_model`,
-`embedding_model_revision`, and `embedding_template_version` with the configured
-expectations. Missing, malformed, or mismatched fields fail before measurement.
-Other status fields such as service URLs, devices, or initialization messages are
-not copied into the report.
+Kod mikroservisa, provera se prijavljuje pomoću `X-API-Key` zaglavlja na podesive Query Service i Embedding Service `/model/status` adrese. Vrednost `llm_model` iz Query Service-a i vrednosti `embedding_model`, `embedding_model_revision` i `embedding_template_version` iz Embedding Service-a porede se sa očekivanjima iz konfiguracije. Nedostajuće, neispravne ili različite vrednosti prekidaju postupak pre merenja. Ostala statusna polja, kao što su URL adrese servisa, uređaji ili poruke o inicijalizaciji, ne prepisuju se u izveštaj.
 
-The current services do not expose their deployed Git or image identity, so an
-external deployment-evidence file is required for every command. A thesis-ready
-run additionally requires its full deployed Git revision to equal
-`runner_git_commit`. Set `thesis_ready` to `false` only for diagnostic runs; a
-revision mismatch is then recorded and cannot be presented as thesis-ready.
+Aktuelni servisi ne objavljuju Git ili image identitet deployment-a, pa je za svaku komandu potrebna spoljna datoteka sa dokazom deployment-a. Za rezultat spreman za master rad puna postavljena Git revizija mora da bude jednaka `runner_git_commit` vrednosti. `thesis_ready` treba postaviti na `false` samo za dijagnostička pokretanja; nepoklapanje revizija se tada beleži i rezultat se ne sme predstaviti kao konačno merenje.
 
-The legacy monolith has no equivalent runtime model-status contract. It therefore
-fails closed unless its external evidence also contains all four observed model
-fields. Missing embedding revision or template data is never filled from the
-runner checkout or current defaults.
+Stari monolit nema odgovarajući ugovor za prijavljivanje identiteta modela tokom izvršavanja. Zato se provera prekida ako spoljni dokaz ne sadrži sva četiri opažena polja modela. Nedostajući embedding revision ili template nikada se ne dopunjavaju iz radne kopije ili aktuelnih podrazumevanih vrednosti.
 
-Example microservices configuration:
+Primer konfiguracije mikroservisa:
 
 ```json
 {
@@ -75,7 +52,7 @@ Example microservices configuration:
 }
 ```
 
-Required deployment evidence for microservices:
+Obavezan dokaz deployment-a za mikroservise:
 
 ```json
 {
@@ -91,8 +68,7 @@ Required deployment evidence for microservices:
 }
 ```
 
-For `runtime_kind: legacy_monolith`, `runtime_identity` contains only
-`runtime_kind` and `thesis_ready`. Its evidence has the same base fields plus:
+Za `runtime_kind: legacy_monolith`, odeljak `runtime_identity` sadrži samo `runtime_kind` i `thesis_ready`. Datoteka sa dokazom ima ista osnovna polja i dodatni odeljak:
 
 ```json
 {
@@ -105,11 +81,9 @@ For `runtime_kind: legacy_monolith`, `runtime_identity` contains only
 }
 ```
 
-## CLI and outputs
+## CLI i izlazne datoteke
 
-API tokens are accepted only through configured environment-variable names. No
-token CLI argument exists, credential fields and credential-bearing URLs are
-rejected, and exact token values are scanned before publication.
+API tokeni prihvataju se samo kroz nazive environment promenljivih iz konfiguracije. Ne postoji CLI argument za neposredno prosleđivanje tokena. Polja za pristupne podatke i URL adrese koje ih sadrže odbijaju se, a tačne vrednosti tokena proveravaju se pre objavljivanja izlaza.
 
 ```powershell
 $env:PERFORMANCE_API_TOKEN = "<runtime token>"
@@ -119,29 +93,19 @@ $env:PERFORMANCE_API_TOKEN = "<runtime token>"
 Remove-Item Env:PERFORMANCE_API_TOKEN -ErrorAction SilentlyContinue
 ```
 
-Each output directory contains `measurement.json`, `samples.csv`, `summary.md`,
-and `SHA256SUMS`. It is built in a temporary sibling directory and atomically
-published. Existing output is protected unless `--overwrite` is explicit.
-`.local-artifacts/performance` is reserved for approved real runs and remains
-untracked.
+Svaki izlazni direktorijum sadrži `measurement.json`, `samples.csv`, `summary.md` i `SHA256SUMS`. Prvo se pravi privremeni susedni direktorijum, a rezultat se objavljuje atomski. Postojeći izlaz je zaštićen osim kada je eksplicitno prosleđen `--overwrite`. Direktorijum `.local-artifacts/performance` rezervisan je za odobrena stvarna merenja i Git ga ne prati.
 
-Search query input is strict and query text is not copied into outputs:
+Ulaz sa upitima za pretragu strogo se proverava, a tekst upita se ne prepisuje u izlaz:
 
 ```json
 {"queries": [{"id": "q01", "query": "example search", "limit": 10}]}
 ```
 
-## Search latency and cold evidence
+## Vreme pretrage i dokaz hladnog pokretanja
 
-Search requests are sequential and timed with `time.perf_counter_ns`. Raw rows
-retain phase, classification, query ID, repetition, outcome/status, HTTP status,
-nanosecond/millisecond latency, result count, parser mode, and a generic failure
-category. Warm-up rows never enter measured statistics. Failed requests remain
-explicit raw rows but are excluded from latency summaries.
+Zahtevi za pretragu izvršavaju se redom i mere pomoću `time.perf_counter_ns`. Izvorni redovi čuvaju fazu, klasifikaciju, query ID, broj ponavljanja, ishod/status, HTTP status, vreme u nanosekundama i milisekundama, broj rezultata, parser režim i opštu kategoriju greške. Warm-up redovi nikada ne ulaze u statistiku merenja. Neuspešni zahtevi ostaju vidljivi u izvornim redovima, ali se izostavljaju iz sažetka vremena.
 
-`warm` is the normal post-warm-up classification. `first_request` requires zero
-warm-ups and does not claim a cold system. `cold` requires zero warm-ups and a
-separate restart/readiness evidence file:
+`warm` je uobičajena klasifikacija nakon zagrevanja. `first_request` zahteva nula warm-up ponavljanja i ne tvrdi da je sistem hladan. `cold` zahteva nula warm-up ponavljanja i odvojenu datoteku sa dokazom restartovanja i readiness provere:
 
 ```json
 {
@@ -152,23 +116,15 @@ separate restart/readiness evidence file:
 }
 ```
 
-Readiness must follow restart, must not be in the future, and must be no older at
-measurement start than configured `cold_evidence_max_age_seconds`. The bound and
-observed readiness age are retained in the report. The first request after valid
-evidence is `cold`; later requests are `warm`.
+Readiness mora biti potvrđen nakon restartovanja, vreme ne sme biti u budućnosti i dokaz na početku merenja ne sme biti stariji od `cold_evidence_max_age_seconds`. Dozvoljena i opažena starost readiness dokaza čuvaju se u izveštaju. Prvi zahtev posle važećeg dokaza označava se kao `cold`, a naredni kao `warm`.
 
-Summaries contain attempted/successful/failed counts, mean, median, min, max, p50,
-and p95. Percentiles use deterministic nearest rank:
-`sorted_values[ceil(p*n)-1]`.
+Sažeci sadrže broj pokušanih, uspešnih i neuspešnih zahteva, kao i srednju vrednost, medijanu, minimum, maksimum, p50 i p95. Percentili koriste deterministički nearest-rank postupak: `sorted_values[ceil(p*n)-1]`.
 
-## Prometheus resources
+## Resursi preko Prometheus-a
 
-Prometheus instant/range definitions are named and fully configurable; the tool
-does not hard-code deployment labels. Each definition must return at most one
-series. Multiple series fail with an instruction to aggregate or narrow the
-PromQL expression, so values from different label sets are never pooled.
+Prometheus instant/range definicije imaju nazive i u potpunosti su podesive; alat nema hard-coded deployment oznake. Svaka definicija sme da vrati najviše jednu seriju. Ako ih vrati više, pokretanje se prekida uz zahtev da se PromQL izraz agregira ili preciznije ograniči. Vrednosti različitih skupova label-a zato se nikada ne objedinjuju.
 
-Example configuration section:
+Primer odeljka konfiguracije:
 
 ```json
 {
@@ -188,24 +144,15 @@ Example configuration section:
 }
 ```
 
-If Prometheus is authenticated, set `api_token_env` in this section. The token
-is sent as a bearer token and is never written to the report.
+Ako Prometheus zahteva autentifikaciju, u ovom odeljku treba postaviti `api_token_env`. Token se šalje kao bearer token i nikada se ne zapisuje u izveštaj.
 
-The accepted label set and series count are recorded with each metric summary.
-Raw timestamp/value/labels are retained. Empty or failed CPU, RAM, GPU utilization,
-or GPU framebuffer queries are `unavailable` with null summaries, never zero.
-Non-finite samples invalidate the run.
+Za svaku metriku beleže se prihvaćeni skup label-a i broj serija. Čuvaju se i izvorno vreme, vrednost i label-e. Prazni ili neuspešni upiti za CPU, RAM, iskorišćenost GPU-a ili GPU framebuffer označavaju se kao `unavailable` sa null sažetkom, a nikada kao nula. Numeričke vrednosti koje nisu konačne čine pokretanje nevažećim.
 
-## Embedding backfill and comparability
+## Embedding backfill i uporedivost
 
-Backfill preflight finishes before the command creates one existing Job Service
-`embedding_backfill` job and polls its ID to a terminal state. It records observed
-queue time, service start/finish, attempts, processed records, service/observed
-duration, and records per second. The tool never harvests data or manufactures
-stale embeddings. Because Job Service timestamps are timezone-naive PostgreSQL
-values, config must explicitly set `job_timestamp_timezone: UTC`.
+Provera pre backfill merenja završava se pre nego što komanda napravi jedan postojeći Job Service posao tipa `embedding_backfill` i prati njegov ID do završnog stanja. Beleže se opaženo vreme u redu, početak i završetak u servisu, broj pokušaja, broj obrađenih zapisa, trajanje prema servisu i merenju i broj zapisa u sekundi. Alat ne pokreće harvest i ne pravi veštački zastarele embeddings. Pošto Job Service vremenske oznake iz PostgreSQL baze nemaju podatak o vremenskoj zoni, konfiguracija mora eksplicitno da sadrži `job_timestamp_timezone: UTC`.
 
-Example configuration section:
+Primer odeljka konfiguracije:
 
 ```json
 {
@@ -220,9 +167,4 @@ Example configuration section:
 }
 ```
 
-Compose, Kubernetes, and monolith runs are comparable only when deployment
-evidence, query/config hashes, runner and deployed revisions, corpus identity,
-configured and observed models, repetitions, endpoint semantics, PromQL scope,
-and measurement windows match. Scrape intervals, readiness criteria, machine
-contention, cache state, GPU clocks, and cold-evidence age remain review items for
-every future real run.
+Compose, Kubernetes i monolitna merenja mogu da se porede samo kada se poklapaju dokaz deployment-a, hash vrednosti upita i konfiguracije, revizije programa za merenje i postavljenog sistema, identitet korpusa, podešeni i opaženi modeli, broj ponavljanja, semantika endpoint-a, PromQL obuhvat i periodi merenja. Scrape intervali, readiness kriterijumi, opterećenje računara, stanje keša, GPU takt i starost cold dokaza moraju se posebno pregledati za svako buduće stvarno merenje.
