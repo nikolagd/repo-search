@@ -38,7 +38,7 @@ button {
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 20px;
   padding: 8px 0 26px;
 }
@@ -1030,7 +1030,6 @@ input:focus {
     padding: 18px;
   }
 
-  .topbar,
   .topbar-actions,
   .results-header,
     .query-plan,
@@ -1039,6 +1038,10 @@ input:focus {
     .metric-bar-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    width: 100%;
   }
 
   .overview {

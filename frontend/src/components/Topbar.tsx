@@ -9,9 +9,6 @@ interface TopbarProps {
 export default function Topbar({ health }: TopbarProps) {
   return (
     <header className="topbar">
-      <div>
-        <h1>Repo Search</h1>
-      </div>
       <div className="topbar-actions">
         <div className="view-switch" aria-label="Primary navigation">
           <NavLink
