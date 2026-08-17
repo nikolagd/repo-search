@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
+import json
+import math
 import platform
 import re
 import time
 import unicodedata
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from importlib.metadata import version
 from typing import Any
 
 import bm25s
+import snowballstemmer
 
-from evaluation.models import EvaluationQuery, QueryRun, RetrievedItem
+from evaluation.models import EvaluationQuery, QueryMetadata, QueryRun, RetrievedItem
 
 
 TOKEN_PATTERN = re.compile(r"\w+", flags=re.UNICODE)
@@ -24,8 +29,305 @@ BM25_LIBRARY_VERSION = version(BM25_LIBRARY)
 LANGUAGE_INDEPENDENT_LEXICAL_METHOD = "language_independent_lexical"
 LANGUAGE_INDEPENDENT_LEXICAL_VERSION = "1.0"
 LANGUAGE_INDEPENDENT_ANALYZER_VERSION = "unicode-word-char4-v1"
+LANGUAGE_AWARE_LEXICAL_METHOD = "language_aware_lexical"
+LANGUAGE_AWARE_LEXICAL_VERSION = "1.2"
+LANGUAGE_AWARE_ANALYZER_VERSION = (
+    "serbian-latin-comparison-snowball-occurrence-query-coverage-v1"
+)
+LANGUAGE_AWARE_STOP_WORD_VERSION = "function-words-v1"
+LANGUAGE_AWARE_QUERY_COVERAGE_VERSION = "query-concepts-stopwords-v1"
+LANGUAGE_AWARE_RRF_WEIGHTS = {
+    "precise_word_bm25": 1.0,
+    "language_aware_comparison_bm25": 1.0,
+    "character_4gram_bm25": 0.5,
+}
 CHAR_NGRAM_SIZE = 4
 RRF_K = 60
+SNOWBALL_LIBRARY = "snowballstemmer"
+SNOWBALL_LIBRARY_VERSION = version(SNOWBALL_LIBRARY)
+
+
+_SERBIAN_CYRILLIC_TO_LATIN = str.maketrans(
+    {
+        "\u0430": "a",
+        "\u0431": "b",
+        "\u0432": "v",
+        "\u0433": "g",
+        "\u0434": "d",
+        "\u0452": "\u0111",
+        "\u0435": "e",
+        "\u0436": "\u017e",
+        "\u0437": "z",
+        "\u0438": "i",
+        "\u0458": "j",
+        "\u043a": "k",
+        "\u043b": "l",
+        "\u0459": "lj",
+        "\u043c": "m",
+        "\u043d": "n",
+        "\u045a": "nj",
+        "\u043e": "o",
+        "\u043f": "p",
+        "\u0440": "r",
+        "\u0441": "s",
+        "\u0442": "t",
+        "\u045b": "\u0107",
+        "\u0443": "u",
+        "\u0444": "f",
+        "\u0445": "h",
+        "\u0446": "c",
+        "\u0447": "\u010d",
+        "\u045f": "d\u017e",
+        "\u0448": "\u0161",
+    }
+)
+_SERBIAN_ASCII_FOLD = str.maketrans(
+    {
+        "\u010d": "c",
+        "\u0107": "c",
+        "\u0111": "dj",
+        "\u0161": "s",
+        "\u017e": "z",
+    }
+)
+_SUPPORTED_LANGUAGE_ROUTES = ("serbian", "english", "mixed")
+
+# These are fixed grammatical function-word inventories, not evaluation-query
+# tuning. They are applied only when constructing content concepts; the
+# existing precise and character retrieval channels keep their original input.
+_SERBIAN_FUNCTION_WORDS = frozenset(
+    {
+        "a",
+        "ali",
+        "ako",
+        "bez",
+        "bi",
+        "bio",
+        "bila",
+        "bile",
+        "bili",
+        "bilo",
+        "biti",
+        "da",
+        "do",
+        "dok",
+        "ili",
+        "i",
+        "iz",
+        "izmedju",
+        "između",
+        "ja",
+        "je",
+        "jer",
+        "još",
+        "jos",
+        "ka",
+        "kad",
+        "kada",
+        "kako",
+        "kao",
+        "ko",
+        "koja",
+        "koje",
+        "koji",
+        "kojim",
+        "kojoj",
+        "kojom",
+        "kom",
+        "kome",
+        "na",
+        "nad",
+        "nakon",
+        "način",
+        "nacin",
+        "ne",
+        "nego",
+        "ni",
+        "nije",
+        "nisam",
+        "nisi",
+        "nismo",
+        "niste",
+        "nisu",
+        "no",
+        "od",
+        "on",
+        "ona",
+        "onaj",
+        "one",
+        "oni",
+        "ono",
+        "pa",
+        "po",
+        "pod",
+        "pre",
+        "prema",
+        "pri",
+        "s",
+        "sa",
+        "se",
+        "si",
+        "smo",
+        "ste",
+        "su",
+        "ta",
+        "taj",
+        "takav",
+        "te",
+        "ti",
+        "to",
+        "toga",
+        "toj",
+        "tom",
+        "tu",
+        "u",
+        "uz",
+        "vam",
+        "vas",
+        "već",
+        "vec",
+        "vi",
+        "za",
+        "zar",
+        "zbog",
+        "što",
+        "sto",
+        "čija",
+        "čije",
+        "čiji",
+        "cija",
+        "cije",
+        "ciji",
+    }
+)
+_ENGLISH_FUNCTION_WORDS = frozenset(
+    {
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "doing",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "had",
+        "has",
+        "have",
+        "having",
+        "he",
+        "her",
+        "here",
+        "hers",
+        "herself",
+        "him",
+        "himself",
+        "his",
+        "how",
+        "i",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "itself",
+        "just",
+        "me",
+        "more",
+        "most",
+        "my",
+        "myself",
+        "no",
+        "nor",
+        "not",
+        "of",
+        "off",
+        "on",
+        "once",
+        "only",
+        "or",
+        "other",
+        "our",
+        "ours",
+        "ourselves",
+        "out",
+        "over",
+        "own",
+        "same",
+        "she",
+        "should",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "the",
+        "their",
+        "theirs",
+        "them",
+        "themselves",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "under",
+        "until",
+        "up",
+        "very",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "whom",
+        "why",
+        "with",
+        "would",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+    }
+)
 
 
 def tokenize(text: str | None) -> list[str]:
@@ -71,6 +373,309 @@ def language_independent_character_ngrams(
         else:
             grams.extend(token[offset : offset + size] for offset in range(len(token) - size + 1))
     return grams
+
+
+def normalize_serbian_latin(text: str | None) -> str:
+    """Normalize Serbian Cyrillic and Latin text to one precise Latin form."""
+
+    normalized = unicodedata.normalize("NFKC", text or "").casefold()
+    return normalized.translate(_SERBIAN_CYRILLIC_TO_LATIN)
+
+
+def normalize_serbian_latin_folded(text: str | None) -> str:
+    """Return an ASCII-friendly Serbian Latin comparison form.
+
+    This form is supplemental only. The original Unicode token channel remains
+    indexed separately by :class:`LanguageAwareLexicalAdapter`.
+    """
+
+    canonical = normalize_serbian_latin(text)
+    decomposed = unicodedata.normalize("NFD", canonical)
+    without_marks = "".join(
+        character
+        for character in decomposed
+        if unicodedata.category(character) != "Mn"
+    )
+    return without_marks.translate(_SERBIAN_ASCII_FOLD)
+
+
+def serbian_latin_word_tokens(text: str | None) -> list[str]:
+    """Tokenize the canonical Serbian Latin comparison representation."""
+
+    return language_independent_word_tokens(normalize_serbian_latin(text))
+
+
+def serbian_latin_folded_word_tokens(text: str | None) -> list[str]:
+    """Tokenize the diacritic-insensitive Serbian Latin comparison form."""
+
+    return language_independent_word_tokens(normalize_serbian_latin_folded(text))
+
+
+def language_route(query_metadata: QueryMetadata) -> str:
+    """Resolve a fixed analyzer route from declared query language and script."""
+
+    language = query_metadata.language.strip().casefold()
+    script = query_metadata.script.strip().casefold()
+    if language in {"serbian", "sr", "srpski"} and script in {"latin", "cyrillic", "\u0107irilica"}:
+        return "serbian"
+    if language in {"english", "en"} and script == "latin":
+        return "english"
+    if language in {"serbian_mixed", "mixed", "serbian-mixed"} and script == "latin":
+        return "mixed"
+    raise ValueError(
+        "unsupported language-aware query metadata route: "
+        f"language={query_metadata.language!r}, script={query_metadata.script!r}"
+    )
+
+
+def _stem_tokens(tokens: list[str], stemmer: Any) -> list[str]:
+    return [str(token) for token in stemmer.stemWords(tokens)] if tokens else []
+
+
+def language_aware_analysis(
+    text: str | None,
+    route: str,
+    *,
+    serbian_stemmer: Any | None = None,
+    english_stemmer: Any | None = None,
+) -> dict[str, list[str]]:
+    """Build precise and occurrence-preserving comparison tokens for one route.
+
+    Each original source-token occurrence contributes at most one copy of each
+    normalized variant. Repeated source-token occurrences remain repeated so
+    BM25 term frequency and document length remain meaningful.
+    """
+
+    if route not in _SUPPORTED_LANGUAGE_ROUTES:
+        raise ValueError(f"unsupported language-aware route: {route!r}")
+    if serbian_stemmer is None and route in {"serbian", "mixed"}:
+        serbian_stemmer = snowballstemmer.stemmer("serbian")
+    if english_stemmer is None and route in {"english", "mixed"}:
+        english_stemmer = snowballstemmer.stemmer("english")
+
+    original_tokens = language_independent_word_tokens(text)
+    canonical_tokens = serbian_latin_word_tokens(text)
+    folded_tokens = serbian_latin_folded_word_tokens(text)
+    stemmed_tokens: list[str] = []
+    comparison_tokens: list[str] = []
+
+    for original_token in original_tokens:
+        canonical_variants = serbian_latin_word_tokens(original_token)
+        folded_variants = serbian_latin_folded_word_tokens(original_token)
+        variants: list[str] = []
+        if route in {"serbian", "mixed"}:
+            variants.extend(canonical_variants)
+            variants.extend(folded_variants)
+            serbian_stems = _stem_tokens(canonical_variants, serbian_stemmer)
+            stemmed_tokens.extend(serbian_stems)
+            variants.extend(serbian_stems)
+        if route == "english":
+            variants.append(original_token)
+            english_stems = _stem_tokens([original_token], english_stemmer)
+            stemmed_tokens.extend(english_stems)
+            variants.extend(english_stems)
+        elif route == "mixed":
+            english_stems = _stem_tokens([original_token], english_stemmer)
+            stemmed_tokens.extend(english_stems)
+            variants.extend(english_stems)
+
+        occurrence_seen: set[str] = set()
+        for value in variants:
+            if value and value not in occurrence_seen:
+                comparison_tokens.append(value)
+                occurrence_seen.add(value)
+
+    return {
+        "original_word_tokens": original_tokens,
+        "canonical_serbian_tokens": canonical_tokens,
+        "diacritic_insensitive_tokens": folded_tokens,
+        "stemmed_tokens": stemmed_tokens,
+        "comparison_tokens": comparison_tokens,
+    }
+
+
+def language_aware_comparison_tokens(
+    text: str | None,
+    route: str,
+    *,
+    serbian_stemmer: Any | None = None,
+    english_stemmer: Any | None = None,
+) -> list[str]:
+    """Return the supplemental language-aware BM25 channel tokens."""
+
+    return language_aware_analysis(
+        text,
+        route,
+        serbian_stemmer=serbian_stemmer,
+        english_stemmer=english_stemmer,
+    )["comparison_tokens"]
+
+
+def _normalized_function_words(route: str) -> frozenset[str]:
+    if route not in _SUPPORTED_LANGUAGE_ROUTES:
+        raise ValueError(f"unsupported language-aware route: {route!r}")
+
+    words: set[str] = set()
+    if route in {"serbian", "mixed"}:
+        for word in _SERBIAN_FUNCTION_WORDS:
+            words.update(serbian_latin_word_tokens(word))
+            words.update(serbian_latin_folded_word_tokens(word))
+    if route in {"english", "mixed"}:
+        words.update(language_independent_word_tokens(" ".join(_ENGLISH_FUNCTION_WORDS)))
+    return frozenset(words)
+
+
+def language_aware_stop_words(route: str) -> frozenset[str]:
+    """Return the fixed normalized function-word set for an analyzer route."""
+
+    return _normalized_function_words(route)
+
+
+_LANGUAGE_AWARE_STOP_WORD_HASH_PAYLOAD = {
+    route: sorted(language_aware_stop_words(route))
+    for route in _SUPPORTED_LANGUAGE_ROUTES
+}
+LANGUAGE_AWARE_STOP_WORD_HASH = hashlib.sha256(
+    json.dumps(
+        {
+            "version": LANGUAGE_AWARE_STOP_WORD_VERSION,
+            "routes": _LANGUAGE_AWARE_STOP_WORD_HASH_PAYLOAD,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
+
+
+@dataclass(frozen=True)
+class LanguageAwareQueryConcept:
+    """One normalized concept group derived from one non-stopword token."""
+
+    key: str
+    source_token: str
+    variants: tuple[str, ...]
+
+
+def _query_token_is_stop_word(token: str, route: str) -> bool:
+    forms = set(language_independent_word_tokens(token))
+    if route in {"serbian", "mixed"}:
+        forms.update(serbian_latin_word_tokens(token))
+        forms.update(serbian_latin_folded_word_tokens(token))
+    return bool(forms & language_aware_stop_words(route))
+
+
+def _query_concept_key(analysis: dict[str, list[str]], route: str) -> str:
+    if analysis["stemmed_tokens"]:
+        return analysis["stemmed_tokens"][0]
+    if route in {"serbian", "mixed"} and analysis["diacritic_insensitive_tokens"]:
+        return analysis["diacritic_insensitive_tokens"][0]
+    return analysis["original_word_tokens"][0]
+
+
+def build_language_aware_query_concepts(
+    text: str | None,
+    route: str,
+    *,
+    serbian_stemmer: Any | None = None,
+    english_stemmer: Any | None = None,
+) -> list[LanguageAwareQueryConcept]:
+    """Build one variant group for each original non-stopword query token.
+
+    A group contains precise, canonical/folded, and route-specific stemmed word
+    variants. Character n-grams are intentionally absent. Repeated source-token
+    occurrences remain represented as groups, while coverage callers collapse
+    duplicate concept keys so repetition cannot inflate unique coverage.
+    """
+
+    if route not in _SUPPORTED_LANGUAGE_ROUTES:
+        raise ValueError(f"unsupported language-aware route: {route!r}")
+    concepts: list[LanguageAwareQueryConcept] = []
+    for source_token in language_independent_word_tokens(text):
+        if _query_token_is_stop_word(source_token, route):
+            continue
+        analysis = language_aware_analysis(
+            source_token,
+            route,
+            serbian_stemmer=serbian_stemmer,
+            english_stemmer=english_stemmer,
+        )
+        variants = tuple(
+            dict.fromkeys(
+                analysis["original_word_tokens"] + analysis["comparison_tokens"]
+            )
+        )
+        if not variants:
+            continue
+        concepts.append(
+            LanguageAwareQueryConcept(
+                key=_query_concept_key(analysis, route),
+                source_token=source_token,
+                variants=variants,
+            )
+        )
+    return concepts
+
+
+def distinct_language_aware_query_concepts(
+    concepts: Iterable[LanguageAwareQueryConcept],
+) -> list[LanguageAwareQueryConcept]:
+    """Collapse repeated concept identities without merging unrelated words."""
+
+    distinct: list[LanguageAwareQueryConcept] = []
+    seen: set[str] = set()
+    for concept in concepts:
+        if concept.key in seen:
+            continue
+        seen.add(concept.key)
+        distinct.append(concept)
+    return distinct
+
+
+def language_aware_document_word_tokens(
+    title: str | None,
+    abstract: str | None,
+    route: str,
+    *,
+    serbian_stemmer: Any | None = None,
+    english_stemmer: Any | None = None,
+) -> frozenset[str]:
+    """Return only word-analysis tokens used for concept matching.
+
+    The character channel is deliberately not part of this set.
+    """
+
+    text = f"{title or ''} {abstract or ''}"
+    analysis = language_aware_analysis(
+        text,
+        route,
+        serbian_stemmer=serbian_stemmer,
+        english_stemmer=english_stemmer,
+    )
+    return frozenset(analysis["original_word_tokens"] + analysis["comparison_tokens"])
+
+
+def matched_language_aware_concepts(
+    concepts: Iterable[LanguageAwareQueryConcept],
+    document_tokens: set[str] | frozenset[str],
+) -> frozenset[str]:
+    """Return distinct concept keys matched by language-aware word variants."""
+
+    matched: set[str] = set()
+    for concept in concepts:
+        if any(variant in document_tokens for variant in concept.variants):
+            matched.add(concept.key)
+    return frozenset(matched)
+
+
+def required_language_aware_concept_matches(content_concept_count: int) -> int:
+    """Return the fixed label-blind primary-ranking coverage threshold."""
+
+    if type(content_concept_count) is not int or content_concept_count < 0:
+        raise ValueError("content concept count must be a non-negative integer")
+    if content_concept_count <= 2:
+        return 1
+    return math.ceil(0.4 * content_concept_count)
 
 
 class _BM25FieldIndex:
@@ -396,6 +1001,374 @@ def language_independent_lexical_metadata(
         ],
         "semantic_components": [],
         "operating_assumption": "same-language lexical overlap or shared surface forms",
+        "cross_language_mapping": None,
+        "cross_lingual_retrieval": False,
+        "multilingual_semantic_understanding": False,
+    }
+    if index_statistics is not None:
+        metadata["index_statistics"] = index_statistics
+    return metadata
+
+
+class LanguageAwareLexicalAdapter(LanguageIndependentLexicalAdapter):
+    """Language-aware extension with one explicit supplemental BM25 rank channel."""
+
+    method = LANGUAGE_AWARE_LEXICAL_METHOD
+
+    def __init__(
+        self,
+        publications: Iterable[dict[str, Any]],
+        *,
+        k1: float = BM25_K1,
+        b: float = BM25_B,
+        title_boost: float = BM25_TITLE_BOOST,
+        character_ngram_size: int = CHAR_NGRAM_SIZE,
+        rrf_k: int = RRF_K,
+    ):
+        super().__init__(
+            publications,
+            k1=k1,
+            b=b,
+            title_boost=title_boost,
+            character_ngram_size=character_ngram_size,
+            rrf_k=rrf_k,
+        )
+        self._serbian_stemmer = snowballstemmer.stemmer("serbian")
+        self._english_stemmer = snowballstemmer.stemmer("english")
+        self._comparison_indexes: dict[str, tuple[_BM25FieldIndex, _BM25FieldIndex]] = {}
+        comparison_statistics: dict[str, dict[str, dict[str, int]]] = {}
+        for route in _SUPPORTED_LANGUAGE_ROUTES:
+            title_tokens = [
+                language_aware_comparison_tokens(
+                    publication.get("title"),
+                    route,
+                    serbian_stemmer=self._serbian_stemmer,
+                    english_stemmer=self._english_stemmer,
+                )
+                for publication in self.publications
+            ]
+            abstract_tokens = [
+                language_aware_comparison_tokens(
+                    publication.get("abstract"),
+                    route,
+                    serbian_stemmer=self._serbian_stemmer,
+                    english_stemmer=self._english_stemmer,
+                )
+                for publication in self.publications
+            ]
+            self._comparison_indexes[route] = (
+                _BM25FieldIndex(title_tokens, k1=k1, b=b),
+                _BM25FieldIndex(abstract_tokens, k1=k1, b=b),
+            )
+            comparison_statistics[route] = {
+                "title": _logical_index_statistics(title_tokens),
+                "abstract": _logical_index_statistics(abstract_tokens),
+            }
+        self.index_statistics["language_aware_comparison"] = comparison_statistics
+        self._coverage_document_tokens = {
+            route: [
+                language_aware_document_word_tokens(
+                    publication.get("title"),
+                    publication.get("abstract"),
+                    route,
+                    serbian_stemmer=self._serbian_stemmer,
+                    english_stemmer=self._english_stemmer,
+                )
+                for publication in self.publications
+            ]
+            for route in _SUPPORTED_LANGUAGE_ROUTES
+        }
+
+    async def retrieve(
+        self,
+        query: EvaluationQuery,
+        limit: int,
+        *,
+        query_metadata: QueryMetadata | None = None,
+    ) -> QueryRun:
+        if query_metadata is None:
+            raise ValueError("language-aware lexical retrieval requires query metadata")
+        if query_metadata.query_id != query.query_id:
+            raise ValueError("query metadata does not match the evaluation query")
+        if type(limit) is not int or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        started = time.perf_counter()
+        route = language_route(query_metadata)
+        word_ranks = self._component_ranks(
+            self._word_title_index,
+            self._word_abstract_index,
+            language_independent_word_tokens(query.text),
+        )
+        char_ranks = self._component_ranks(
+            self._char_title_index,
+            self._char_abstract_index,
+            language_independent_character_ngrams(
+                query.text,
+                size=self.character_ngram_size,
+            ),
+        )
+        comparison_title_index, comparison_abstract_index = self._comparison_indexes[route]
+        comparison_ranks = self._component_ranks(
+            comparison_title_index,
+            comparison_abstract_index,
+            language_aware_comparison_tokens(
+                query.text,
+                route,
+                serbian_stemmer=self._serbian_stemmer,
+                english_stemmer=self._english_stemmer,
+            ),
+        )
+        fused_scores: dict[int, float] = {}
+        weighted_components = (
+            (word_ranks, LANGUAGE_AWARE_RRF_WEIGHTS["precise_word_bm25"]),
+            (comparison_ranks, LANGUAGE_AWARE_RRF_WEIGHTS["language_aware_comparison_bm25"]),
+            (char_ranks, LANGUAGE_AWARE_RRF_WEIGHTS["character_4gram_bm25"]),
+        )
+        for ranks, weight in weighted_components:
+            for index, rank in ranks.items():
+                fused_scores[index] = fused_scores.get(index, 0.0) + weight / (self.rrf_k + rank)
+
+        concepts = distinct_language_aware_query_concepts(
+            build_language_aware_query_concepts(
+                query.text,
+                route,
+                serbian_stemmer=self._serbian_stemmer,
+                english_stemmer=self._english_stemmer,
+            )
+        )
+        content_concept_count = len(concepts)
+        required_matches = required_language_aware_concept_matches(content_concept_count)
+        matched_counts = {
+            index: len(
+                matched_language_aware_concepts(concepts, self._coverage_document_tokens[route][index])
+            )
+            for index in fused_scores
+        }
+        primary_indices = [
+            index
+            for index in fused_scores
+            if matched_counts[index] >= required_matches
+        ]
+        primary_indices.sort(
+            key=lambda index: (-fused_scores[index], str(self.publications[index]["id"]))
+        )
+        backfill_indices = [
+            index
+            for index in fused_scores
+            if matched_counts[index] < required_matches
+        ]
+        backfill_indices.sort(
+            key=lambda index: (
+                -matched_counts[index],
+                -fused_scores[index],
+                str(self.publications[index]["id"]),
+            )
+        )
+        ranked_indices = (primary_indices + backfill_indices)[:limit]
+        results = [
+            RetrievedItem(
+                publication_id=str(self.publications[index]["id"]),
+                score=fused_scores[index],
+                title=self.publications[index].get("title"),
+                abstract=self.publications[index].get("abstract"),
+                source_url=self.publications[index].get("source_url"),
+            )
+            for index in ranked_indices[:limit]
+        ]
+        return QueryRun(
+            query.query_id,
+            self.method,
+            results,
+            latency_ms=(time.perf_counter() - started) * 1000,
+        )
+
+
+def language_aware_lexical_metadata(
+    *,
+    index_statistics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "method_id": LANGUAGE_AWARE_LEXICAL_METHOD,
+        "method_version": LANGUAGE_AWARE_LEXICAL_VERSION,
+        "algorithm": (
+            "coverage-gated weighted RRF(word BM25, within-token character 4-gram BM25, "
+            "language-aware comparison BM25)"
+        ),
+        "implementation": BM25_LIBRARY,
+        "implementation_version": BM25_LIBRARY_VERSION,
+        "stemmer_library": SNOWBALL_LIBRARY,
+        "stemmer_library_version": SNOWBALL_LIBRARY_VERSION,
+        "stemmer_algorithms": {"serbian": "serbian", "english": "english"},
+        "python_version": platform.python_version(),
+        "unicode_database_version": unicodedata.unidata_version,
+        "bm25_variant": "lucene",
+        "bm25_parameters": {"k1": BM25_K1, "b": BM25_B},
+        "title_boost": BM25_TITLE_BOOST,
+        "analyzer_id": LANGUAGE_AWARE_ANALYZER_VERSION,
+        "normalization_steps": [
+            "replace null with empty string",
+            "Unicode NFKC normalization and default case folding for the precise channel",
+            "retain original Unicode Letter/Mark/Number word tokens",
+            "canonical Serbian Cyrillic-to-Latin mapping for the comparison channel",
+            "NFD mark removal plus Serbian Latin ASCII folding for a supplemental variant",
+            "apply the declared Snowball stemmer to the declared language route",
+        ],
+        "serbian_cyrillic_to_latin_mapping": {
+            "\u0430": "a",
+            "\u0431": "b",
+            "\u0432": "v",
+            "\u0433": "g",
+            "\u0434": "d",
+            "\u0452": "\u0111",
+            "\u0435": "e",
+            "\u0436": "\u017e",
+            "\u0437": "z",
+            "\u0438": "i",
+            "\u0458": "j",
+            "\u043a": "k",
+            "\u043b": "l",
+            "\u0459": "lj",
+            "\u043c": "m",
+            "\u043d": "n",
+            "\u045a": "nj",
+            "\u043e": "o",
+            "\u043f": "p",
+            "\u0440": "r",
+            "\u0441": "s",
+            "\u0442": "t",
+            "\u045b": "\u0107",
+            "\u0443": "u",
+            "\u0444": "f",
+            "\u0445": "h",
+            "\u0446": "c",
+            "\u0447": "\u010d",
+            "\u045f": "d\u017e",
+            "\u0448": "\u0161",
+        },
+        "serbian_diacritic_insensitive_mapping": {
+            "\u010d": "c",
+            "\u0107": "c",
+            "\u0111": "dj",
+            "\u0161": "s",
+            "\u017e": "z",
+        },
+        "query_routing": {
+            "source": "query metadata language and script fields; no LLM detection",
+            "routes": {
+                "serbian": {
+                    "language_values": ["Serbian", "sr", "srpski"],
+                    "script_values": ["Latin", "Cyrillic", "\u0107irilica"],
+                    "stemmer": "serbian",
+                },
+                "english": {
+                    "language_values": ["English", "en"],
+                    "script_values": ["Latin"],
+                    "stemmer": "english",
+                },
+                "mixed": {
+                    "language_values": ["Serbian_mixed", "mixed", "Serbian-mixed"],
+                    "script_values": ["Latin"],
+                    "stemmers": ["serbian", "english"],
+                    "handling": "apply both fixed stemmers to the complete query and corpus text",
+                },
+            },
+        },
+        "precise_original_channel": {
+            "word_tokens": "same Unicode Letter/Mark/Number tokens as language_independent_lexical",
+            "character_ngrams": "same within-token character 4-grams as language_independent_lexical",
+            "folded_forms_replace_original": False,
+        },
+        "comparison_channel": {
+            "tokens": [
+                "canonical_serbian_latin_tokens",
+                "diacritic_insensitive_serbian_latin_tokens",
+                "declared_language_stems",
+            ],
+            "token_occurrence_policy": (
+                "one copy of each normalized variant per original source-token occurrence; "
+                "repeated source-token occurrences remain repeated"
+            ),
+            "document_level_deduplication": False,
+            "synonyms": None,
+            "lemmatization": None,
+            "stop_words": {
+                "applies_to": "query concept coverage only; precise BM25 channels remain unchanged",
+                "version": LANGUAGE_AWARE_STOP_WORD_VERSION,
+                "sha256": LANGUAGE_AWARE_STOP_WORD_HASH,
+            },
+            "source_token_variant_policy": (
+                "each source-token occurrence emits at most one copy of each distinct normalized "
+                "variant; repeated source-token occurrences remain repeated"
+            ),
+        },
+        "query_concept_coverage": {
+            "version": LANGUAGE_AWARE_QUERY_COVERAGE_VERSION,
+            "stop_word_version": LANGUAGE_AWARE_STOP_WORD_VERSION,
+            "stop_word_sha256": LANGUAGE_AWARE_STOP_WORD_HASH,
+            "stop_word_rationale": (
+                "fixed Serbian and English grammatical function-word inventories remove "
+                "syntactic scaffolding from coverage without removing meaningful domain terms"
+            ),
+            "raw_stop_words": {
+                "serbian": sorted(_SERBIAN_FUNCTION_WORDS),
+                "english": sorted(_ENGLISH_FUNCTION_WORDS),
+            },
+            "normalized_stop_words_by_route": {
+                route: sorted(language_aware_stop_words(route))
+                for route in _SUPPORTED_LANGUAGE_ROUTES
+            },
+            "normalization": (
+                "NFKC/case-fold tokens; Serbian Cyrillic to canonical Latin; Serbian diacritic "
+                "folding; route-specific Snowball stems for variants"
+            ),
+            "concept_group_policy": (
+                "one group per original non-stopword query token; each group contains precise, "
+                "canonical/folded, and route-appropriate stem variants; duplicate concept keys "
+                "are counted once for distinct coverage"
+            ),
+            "document_matching": (
+                "a concept matches when any word-analysis variant occurs in the title/abstract "
+                "union; character 4-grams never create or increase concept coverage"
+            ),
+            "threshold": {
+                "content_concept_count_le_2": 1,
+                "content_concept_count_gt_2": "ceil(0.4 * content_concept_count)",
+            },
+            "backfill": (
+                "primary candidates meet the threshold and retain lexical fusion order; if "
+                "needed, below-threshold candidates are ordered by matched concept count "
+                "descending, lexical fusion score descending, publication_id ascending"
+            ),
+        },
+        "character_ngrams": {
+            "minimum_n": CHAR_NGRAM_SIZE,
+            "maximum_n": CHAR_NGRAM_SIZE,
+            "boundaries": "within word tokens only; punctuation and whitespace never crossed",
+            "boundary_markers": False,
+            "short_token_rule": "a token shorter than four code points is emitted whole once",
+        },
+        "fields": [
+            {"name": "title", "boost": BM25_TITLE_BOOST},
+            {"name": "abstract", "boost": 1.0},
+        ],
+        "component_field_combination": "2.0 * title BM25 score + abstract BM25 score",
+        "fusion": {
+            "method": "reciprocal_rank_fusion",
+            "k": RRF_K,
+            "components": [
+                "word_bm25_precise_original",
+                "character_4gram_bm25_precise_original",
+                "language_aware_comparison_bm25",
+            ],
+            "component_weights": LANGUAGE_AWARE_RRF_WEIGHTS,
+            "missing_document_contribution": 0.0,
+        },
+        "tie_breaking": [
+            "component BM25 score descending, then publication_id ascending",
+            "fused RRF score descending, then publication_id ascending",
+        ],
+        "semantic_components": [],
+        "operating_assumption": "lexical overlap, Serbian script/diacritic variants, or language-specific inflection",
         "cross_language_mapping": None,
         "cross_lingual_retrieval": False,
         "multilingual_semantic_understanding": False,

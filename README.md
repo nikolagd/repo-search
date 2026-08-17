@@ -16,7 +16,7 @@ Kod više autora `author_match=any` prihvata publikaciju povezanu sa bar jednim 
 
 Query Service i fallback parser izdvajaju samo obeležene autorske konstrukcije. Imena prepoznata u glavnom upitu vraćaju se kao `extracted_author_names` u postojećem search odgovoru i frontend ih prikazuje kao query oznake bez dodatnog LLM poziva. Ona se ne pretvaraju automatski u lokalne ID vrednosti. Fallback podržava oblike kao `autor: Ime Prezime`, `radovi autora Ime Prezime`, obeležene liste sa `i`/`ili`, `papers by Name`, kao i eksplicitne oblike za koautorstvo. Proizvoljan tekst koji samo liči na ime ne tumači se automatski kao autor.
 
-Author-only rezultati su deterministički poređani po datumu opadajuće (`NULLS LAST`), zatim po naslovu i ID-u. Nemaju izmišljenu kosinusnu sličnost niti skor. U author-only režimu Query i Embedding servisi se ne pozivaju; u hybrid režimu autorski uslov ograničava kandidate pre vektorskog rangiranja.
+Rezultati pretrage samo prema autoru deterministički su poređani po opadajućem datumu (`NULLS LAST`), zatim po naslovu i identifikatoru. Nemaju izmišljenu kosinusnu sličnost niti rezultat. U režimu pretrage samo prema autoru Query i Embedding servisi se ne pozivaju; u hibridnom režimu autorski uslov ograničava kandidate pre vektorskog rangiranja.
 
 ## 1. Preduslovi
 

@@ -9,6 +9,25 @@ interface ResultsPanelProps {
   yearLabel: string;
 }
 
+const SEARCH_MODE_LABELS: Record<SearchResponse["search_mode"], string> = {
+  semantic: "Semantic",
+  author: "Author",
+  hybrid: "Hybrid",
+};
+
+const PARSER_MODE_LABELS: Record<string, string> = {
+  llm: "LLM",
+  llm_repaired: "LLM repaired",
+  fallback: "Fallback",
+  fallback_service_error: "Fallback after service error",
+  explicit: "Explicit filters",
+};
+
+function parserModeLabel(mode?: string): string {
+  if (!mode) return "Unknown";
+  return PARSER_MODE_LABELS[mode] ?? mode.replaceAll("_", " ");
+}
+
 export default function ResultsPanel({ error, loading, searchPayload, yearLabel }: ResultsPanelProps) {
   const results = searchPayload?.results ?? [];
   const resultCount = results.length;
@@ -26,8 +45,10 @@ export default function ResultsPanel({ error, loading, searchPayload, yearLabel 
       {searchPayload?.plan && (
         <div className="query-plan">
           <span>{searchPayload.plan.interpreted_query}</span>
-          <strong>{searchPayload.search_mode}</strong>
-          {searchPayload.plan.used_fallback && <strong>Fallback parser</strong>}
+          <div className="query-plan-modes">
+            <strong>Retrieval: {SEARCH_MODE_LABELS[searchPayload.search_mode]}</strong>
+            <strong>Parser: {parserModeLabel(searchPayload.plan.parser_mode)}</strong>
+          </div>
         </div>
       )}
 

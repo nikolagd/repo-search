@@ -265,6 +265,34 @@ def test_candidate_pool_accepts_complete_matrix_including_empty_runs(tmp_path) -
     assert output.is_file()
 
 
+def test_candidate_pool_and_report_accept_language_aware_method_explicitly(tmp_path) -> None:
+    queries, runs = _pool_inputs(
+        tmp_path,
+        methods=("language_aware_lexical", "vector_only", "full_pipeline"),
+    )
+    output = tmp_path / "language-aware-pool.csv"
+
+    assert main(
+        [
+            "candidate-pool",
+            "--queries",
+            str(queries),
+            "--runs",
+            str(runs),
+            "--output",
+            str(output),
+            "--methods",
+            "language_aware_lexical",
+            "vector_only",
+            "full_pipeline",
+        ]
+    ) == 0
+    assert output.is_file()
+    with output.open(encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows == []
+
+
 def test_candidate_pool_missing_matrix_entry_fails_before_writing(tmp_path) -> None:
     queries, runs = _pool_inputs(
         tmp_path,

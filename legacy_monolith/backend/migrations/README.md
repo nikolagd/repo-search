@@ -1,19 +1,19 @@
-# Database migrations
+# Migracije baze podataka
 
-Run pending migrations with:
+Migracije koje još nisu primenjene pokreću se komandom:
 
 ```bash
 python -m etl.migrate
 ```
 
-The runner uses the existing `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and
-`DB_PASSWORD` environment variables.
+Program koristi postojeće environment promenljive `DB_HOST`, `DB_PORT`, `DB_NAME`,
+`DB_USER` i `DB_PASSWORD`.
 
-For Docker startup, run this command after Postgres is accepting connections and
-before starting FastAPI or ETL workers.
+Pri pokretanju kroz Docker, komandu treba izvršiti nakon što PostgreSQL počne da
+prihvata konekcije, a pre pokretanja FastAPI ili ETL worker procesa.
 
-For the FastAPI container, `RUN_DB_MIGRATIONS_ON_STARTUP=true` can be used to
-run pending migrations during application startup.
+U FastAPI kontejneru vrednost `RUN_DB_MIGRATIONS_ON_STARTUP=true` omogućava
+primenu migracija prilikom pokretanja aplikacije.
 
-The Postgres image must include `pgvector`; the first migration runs
+PostgreSQL image mora da sadrži `pgvector`. Prva migracija izvršava
 `CREATE EXTENSION IF NOT EXISTS vector`.

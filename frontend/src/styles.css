@@ -38,7 +38,7 @@ button {
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 20px;
   padding: 8px 0 26px;
 }
@@ -463,6 +463,13 @@ input:focus {
   flex: 0 0 auto;
   color: #b45309;
   font-size: 0.82rem;
+}
+
+.query-plan-modes {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
 }
 
 .empty-state {
@@ -1023,7 +1030,6 @@ input:focus {
     padding: 18px;
   }
 
-  .topbar,
   .topbar-actions,
   .results-header,
     .query-plan,
@@ -1034,8 +1040,16 @@ input:focus {
     flex-direction: column;
   }
 
+  .topbar-actions {
+    width: 100%;
+  }
+
   .overview {
     grid-template-columns: 1fr;
+  }
+
+  .query-plan-modes {
+    flex-wrap: wrap;
   }
 
   .model-card-grid,

@@ -1,15 +1,15 @@
-# Automated tests
+# Automatizovani testovi
 
-The test suite targets the current implementation under `microservices/`. Unit tests use deterministic inputs and mocks; they do not call live OAI-PMH repositories, Ollama, external APIs, PostgreSQL, Docker, or Kubernetes.
+Skup testova proverava aktuelnu implementaciju iz direktorijuma `microservices/`. Jedinični testovi koriste determinističke ulaze i zamenske objekte; ne pozivaju aktivne OAI-PMH repozitorijume, Ollama servis, spoljne API-je, PostgreSQL, Docker ni Kubernetes.
 
-## Local dependencies
+## Lokalne zavisnosti
 
-- Python and the runtime packages from `requirements.txt`.
-- Pytest from `requirements-dev.txt`.
-- Docker Desktop only for PostgreSQL/pgvector integration tests.
-- No Minikube, Kubernetes deployment, running application stack, Ollama model, or external API credentials.
+- Python i paketi za izvršavanje iz `requirements.txt`.
+- Pytest iz `requirements-dev.txt`.
+- Docker Desktop je potreban samo za PostgreSQL/pgvector integracione testove.
+- Minikube, Kubernetes deployment, pokrenut aplikacioni sistem, Ollama model i pristupni podaci za spoljne API-je nisu potrebni.
 
-From the repository root, install the existing runtime dependencies and the test-only dependency:
+Iz korena repozitorijuma treba instalirati postojeće zavisnosti za izvršavanje i zavisnosti namenjene testiranju:
 
 ```powershell
 py -3.13 -m venv .venv
@@ -17,17 +17,17 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 ```
 
-## Unit tests
+## Jedinični testovi
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -m unit
 ```
 
-This command does not require Docker, PostgreSQL, Kubernetes, the application stack, a live repository, or an LLM service.
+Ova komanda ne zahteva Docker, PostgreSQL, Kubernetes, pokrenut aplikacioni sistem, aktivan repozitorijum ni LLM servis.
 
-## PostgreSQL/pgvector integration tests
+## PostgreSQL/pgvector integracioni testovi
 
-Start the isolated database and point the test suite at it:
+Potrebno je pokrenuti izolovanu bazu i usmeriti testove na nju:
 
 ```powershell
 docker compose -f docker-compose.test.yml up -d --wait
@@ -37,16 +37,16 @@ docker compose -f docker-compose.test.yml down --volumes
 Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue
 ```
 
-The integration fixtures create uniquely named schemas and remove them after each test. The Docker service uses container-local temporary storage and does not require the complete application deployment. Job reliability tests use PostgreSQL transactions and locks; vector retrieval tests additionally require the `vector` extension.
+Integracioni fixture-i prave šeme sa jedinstvenim nazivima i uklanjaju ih nakon svakog testa. Docker servis koristi privremeno skladište unutar kontejnera i ne zahteva pokretanje cele aplikacije. Testovi pouzdanosti poslova koriste PostgreSQL transakcije i zaključavanje, dok je za testove vektorske pretrage dodatno potrebna ekstenzija `vector`.
 
-When `TEST_DATABASE_URL` is not set or cannot be reached, PostgreSQL integration tests are collected and reported as skipped. On a reachable PostgreSQL server without the `vector` extension, job reliability tests can run while pgvector retrieval tests are skipped. A configured database that is reachable but fails during the tested behavior causes a test failure.
+Kada `TEST_DATABASE_URL` nije postavljen ili baza nije dostupna, PostgreSQL integracioni testovi se pronalaze, ali se označavaju kao preskočeni. Ako je PostgreSQL dostupan bez ekstenzije `vector`, testovi pouzdanosti poslova mogu da se izvrše, dok se pgvector testovi preskaču. Greška tokom provere ponašanja na dostupnoj i podešenoj bazi smatra se neuspehom testa.
 
-## Complete suite
+## Kompletan skup testova
 
-With the isolated database running and `TEST_DATABASE_URL` set as above:
+Kada je izolovana baza pokrenuta i `TEST_DATABASE_URL` postavljen kao u prethodnom primeru:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Without PostgreSQL/pgvector, the same command runs all unit tests and reports database integration tests as skipped.
+Bez PostgreSQL/pgvector baze ista komanda pokreće sve jedinične testove, dok se integracioni testovi baze prikazuju kao preskočeni.

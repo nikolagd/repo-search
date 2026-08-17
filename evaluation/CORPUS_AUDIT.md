@@ -1,51 +1,51 @@
-# Corpus Audit Foundation
+# Provera korpusa
 
-The corpus-audit command creates a read-only, reproducible description and vector-free snapshot of the persisted publication corpus. It does not initialize schemas, harvest repositories, update publications, request embeddings, or call application endpoints.
+Komanda `corpus-audit` pravi ponovljiv opis i snimak sačuvanog korpusa publikacija bez vektora, koristeći bazu isključivo za čitanje. Ona ne inicijalizuje šemu, ne preuzima zapise iz repozitorijuma, ne menja publikacije, ne zahteva izradu embedding reprezentacija i ne poziva aplikacione endpoint-e.
 
-## Command
+## Komanda
 
-Pass the database URL explicitly:
+Adresa baze može se proslediti neposredno:
 
 ```powershell
 .\.venv\Scripts\python.exe -m evaluation.corpus_audit --database-url "postgresql://USER:PASSWORD@HOST:PORT/DATABASE" --output-root path\to\audits --embedding-model intfloat/multilingual-e5-large
 ```
 
-Or set `CORPUS_AUDIT_DATABASE_URL` and omit `--database-url`. The URL and its credentials are used only to establish the connection and are never written to generated files. Before the first query, the command starts one PostgreSQL `REPEATABLE READ`, `READ ONLY` transaction. Every audit query uses that connection and transaction, and the command executes only `SELECT` statements.
+Druga mogućnost je postavljanje promenljive `CORPUS_AUDIT_DATABASE_URL` i izostavljanje argumenta `--database-url`. Adresa i pristupni podaci koriste se samo za uspostavljanje veze i nikada se ne upisuju u izlazne datoteke. Pre prvog upita pokreće se jedna PostgreSQL transakcija `REPEATABLE READ`, `READ ONLY`. Svi upiti koriste istu vezu i transakciju, a komanda izvršava isključivo `SELECT` naredbe.
 
-Each invocation creates `corpus-audit-YYYYMMDDTHHMMSS.ffffffZ` under the output root.
+Svako pokretanje pravi direktorijum `corpus-audit-YYYYMMDDTHHMMSS.ffffffZ` unutar zadatog izlaznog direktorijuma.
 
-## Outputs
+## Izlazne datoteke
 
-- `audit.json`: reproducibility metadata, PostgreSQL transaction snapshot, whole-corpus quality counts, exact and heuristic duplicate groups, explicitly unavailable fields, and limitations.
-- `repositories.csv`: repository identity/configuration, publication count, and the latest persisted harvest job by descending start time and job ID.
-- `metadata_quality.csv`: one row per repository and one `all` row with quality and embedding-state counts.
-- `corpus_snapshot.json`: canonical UTF-8 snapshot used for hashing. It contains no vector values or database credentials.
-- `summary.md`: separates measured values, unavailable/not-recorded values, heuristic duplicate candidates, and limitations.
+- `audit.json`: podaci potrebni za ponavljanje postupka, PostgreSQL snimak transakcije, zbirni pokazatelji kvaliteta korpusa, grupe tačnih i mogućih duplikata, polja koja nisu dostupna i ograničenja.
+- `repositories.csv`: identitet i konfiguracija repozitorijuma, broj publikacija i poslednji sačuvani harvest posao prema opadajućem vremenu pokretanja i identifikatoru posla.
+- `metadata_quality.csv`: po jedan red za svaki repozitorijum i zbirni red `all`, sa pokazateljima kvaliteta i stanja embedding reprezentacija.
+- `corpus_snapshot.json`: kanonski UTF-8 snimak koji se koristi za izračunavanje hash vrednosti. Ne sadrži vektore ni pristupne podatke baze.
+- `summary.md`: razdvaja izmerene vrednosti, podatke koji nisu dostupni ili nisu sačuvani, moguće duplikate dobijene heuristikom i ograničenja.
 
-## Definitions
+## Definicije
 
-- Missing or blank text means SQL `NULL` or a string containing only whitespace.
-- A publication has no authors when no `publication_author`/`author` rows produce a name.
-- Missing date means SQL `NULL`.
-- Current, stale/unknown, and missing embeddings use `microservices.common.embedding_provenance.embedding_is_current`, the active model argument, and the existing expected dimension.
-- Latest harvest job means latest submitted job: the first `repository_harvest` row ordered by repository ID, `created_at DESC`, then job ID descending. A newer queued job with no start timestamp therefore remains latest. `job_created_at` is exported. Duration is `finished_at - started_at`; it is unavailable if either timestamp is missing.
-- `last_successful_harvest` remains the independent persisted `repository.last_harvest` value and is not replaced by latest-job state.
-- Exact duplicate OAI identifiers are separate nonblank values occurring more than once. The unique database constraint should normally make this zero.
-- Potential duplicate candidates are not confirmed duplicates. Their grouping rule is: Unicode NFKC normalization, case-folding, and whitespace collapse for title and source URL; require a nonblank normalized title; group by normalized title, exact ISO date or missing, and normalized source URL or missing.
-- Selected OAI `metadataPrefix` and parser-skipped record counts are reported as `not recorded`, because the current schema does not persist them. This is distinct from numeric zero.
+- Tekst se smatra nedostajućim ili praznim kada je SQL vrednost `NULL` ili sadrži samo beline.
+- Publikacija nema autore ako relacije `publication_author` i `author` ne daju nijedno ime.
+- Datum nedostaje kada je SQL vrednost `NULL`.
+- Aktuelne, zastarele ili nepoznate i nedostajuće embedding reprezentacije određuju se funkcijom `microservices.common.embedding_provenance.embedding_is_current`, prosleđenim aktivnim modelom i postojećom očekivanom dimenzijom.
+- Poslednji harvest posao je poslednje podnet posao: prvi red tipa `repository_harvest` sortiran po identifikatoru repozitorijuma, zatim po `created_at DESC` i opadajućem identifikatoru posla. Noviji posao u stanju čekanja, bez vremena početka, zbog toga se i dalje smatra poslednjim. Polje `job_created_at` se izvozi. Trajanje se računa kao `finished_at - started_at`, a nije dostupno ako bilo koje vreme nedostaje.
+- `last_successful_harvest` ostaje nezavisna sačuvana vrednost `repository.last_harvest` i ne zamenjuje se stanjem poslednjeg posla.
+- Tačni duplikati OAI identifikatora predstavljaju iste neprazne vrednosti koje se pojavljuju više puta. Jedinstveno ograničenje baze bi u uobičajenom radu trebalo da zadrži ovu vrednost na nuli.
+- Mogući duplikati nisu potvrđeni duplikati. Pravilo grupisanja primenjuje Unicode NFKC normalizaciju, svođenje velikih i malih slova i spajanje belina na naslov i izvornu adresu; zahteva neprazan normalizovan naslov; zatim grupiše prema normalizovanom naslovu, tačnom ISO datumu ili njegovom odsustvu i normalizovanoj izvornoj adresi ili njenom odsustvu.
+- Izabrani OAI `metadataPrefix` i broj zapisa koje je parser preskočio prikazuju se kao `not recorded`, pošto ih postojeća šema ne čuva. Ova vrednost se razlikuje od numeričke nule.
 
-## Snapshot And Hash
+## Snimak i hash vrednost
 
-Snapshot format is `repo-search-corpus-v1`. Publications are ordered by numeric publication ID; authors are sorted as strings. Each record contains publication ID, repository ID, OAI identifier, title, abstract, ISO date, source URL, and authors. Embedding vectors and provenance are excluded.
+Format snimka je `repo-search-corpus-v1`. Publikacije su poređane prema numeričkom identifikatoru, a autori abecedno kao tekstualne vrednosti. Svaki zapis sadrži identifikator publikacije, identifikator repozitorijuma, OAI identifikator, naslov, sažetak, ISO datum, izvornu adresu i autore. Vektori i podaci o njihovom poreklu nisu uključeni.
 
-The snapshot object is serialized with UTF-8, Unicode preserved, keys sorted, and JSON separators `,` and `:` without insignificant whitespace. `corpus_snapshot.json` is exactly those canonical bytes. The SHA-256 hexadecimal digest of those bytes is stored in `audit.json`. Unchanged persisted snapshot fields therefore produce the same hash regardless of audit timestamp or input row order.
+Objekat snimka serijalizuje se u UTF-8 formatu uz očuvanje Unicode znakova, sortirane ključeve i JSON separatore `,` i `:` bez suvišnih belina. Datoteka `corpus_snapshot.json` sadrži upravo te kanonske bajtove. Njihova SHA-256 vrednost zapisuje se u `audit.json`. Ako se sačuvana polja korpusa ne promene, dobija se ista hash vrednost bez obzira na vreme provere ili početni redosled redova.
 
-## Limitations And Real Corpus Freeze
+## Ograničenja i zamrzavanje stvarnog korpusa
 
-- The audit describes persisted state at one PostgreSQL repeatable-read transaction snapshot; it does not verify remote OAI repositories or infer unrecorded harvest/parser behavior.
-- `pg_current_snapshot()` is recorded as a PostgreSQL transaction snapshot for reproducibility diagnostics. It is not an external backup, restore point, or durable database snapshot identifier.
-- The external database backup/snapshot identifier remains a separate manual value because the application cannot infer it. For the real evaluation freeze, stop corpus-changing jobs or run against a database snapshot/replica and record its external identifier separately.
-- The tool loads publication metadata into memory to produce deterministic JSON and Python-side provenance/duplicate classifications. Large future corpora may require streaming or external sorting.
-- Database server version is recorded when the server returns it; missing server metadata must remain unavailable rather than inferred.
+- Provera opisuje sačuvano stanje u jednom PostgreSQL repeatable-read snimku transakcije; ne proverava udaljene OAI repozitorijume i ne zaključuje o harvest ili parser ponašanju koje nije sačuvano.
+- `pg_current_snapshot()` se beleži kao PostgreSQL snimak transakcije radi dijagnostike i ponavljanja postupka. On nije spoljna rezervna kopija, tačka povratka ni trajni identifikator snimka baze.
+- Identifikator spoljne rezervne kopije ili snimka baze ostaje posebna ručno zadata vrednost pošto ga aplikacija ne može izvesti. Za stvarno zamrzavanje evaluacije potrebno je zaustaviti poslove koji menjaju korpus ili koristiti snimak odnosno repliku baze, a njen spoljni identifikator zabeležiti odvojeno.
+- Alat učitava metapodatke publikacija u memoriju radi determinističkog JSON izlaza i klasifikacije porekla vektora i duplikata u Python kodu. Veći budući korpusi mogu zahtevati obradu u toku ili spoljno sortiranje.
+- Verzija servera baze beleži se kada je PostgreSQL vrati; nedostajući serverski podaci moraju ostati označeni kao nedostupni, bez izvođenja pretpostavki.
 
-Before the real evaluation, record the Git commit, active embedding model, database snapshot/backup identifier, audit output directory, and resulting corpus hash. Archive all five files without editing them and use the canonical snapshot as the corpus identity for retrieval runs.
+Pre stvarne evaluacije potrebno je zabeležiti Git commit, aktivni embedding model, identifikator snimka ili rezervne kopije baze, direktorijum izlaza provere i dobijenu hash vrednost korpusa. Svih pet datoteka treba arhivirati bez izmena, a kanonski snimak koristiti kao identitet korpusa pri pokretanju pretraga.

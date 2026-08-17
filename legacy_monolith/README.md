@@ -1,6 +1,6 @@
-# Legacy Monolith Reference
+# Referentna verzija starog monolita
 
-This folder contains the previous monolithic backend implementation for reference.
+Ovaj direktorijum sadrži prethodnu monolitnu implementaciju backend-a i služi kao referenca.
 
 - `backend/api`
 - `backend/etl`
@@ -10,4 +10,4 @@ This folder contains the previous monolithic backend implementation for referenc
 - `backend/Dockerfile.api`
 - `docker-compose.monolith.yml`
 
-The active implementation on this branch is the microservice stack in `microservices/` and `docker-compose.microservices.yml`.
+Aktivna implementacija na ovoj grani je mikroservisni sistem iz direktorijuma `microservices/` i datoteke `docker-compose.microservices.yml`.

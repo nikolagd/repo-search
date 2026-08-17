@@ -1,86 +1,86 @@
-# Language-independent lexical baseline for the thesis evaluation
+# Jezički nezavisna leksička osnova za evaluaciju
 
-## Role and bounded claim
+## Uloga i granice tvrdnje
 
-The final candidate pool uses the machine method ID `language_independent_lexical` (version `1.0`) alongside the unchanged `vector_only` and `full_pipeline` runs. In Serbian thesis terminology, this comparator is a **jezički nezavisna leksička osnova**.
+Završni skup kandidata koristi mašinski identifikator metoda `language_independent_lexical` (verzija `1.0`) uz nepromenjena izvršavanja `vector_only` i `full_pipeline`. U master radu ovaj metod se naziva **jezički nezavisna leksička osnova**.
 
-This is a classic, strictly lexical comparator. It scores shared normalized word forms and shared character substrings. It does not use embeddings, an LLM, machine translation, transliteration, dictionaries, semantic query expansion, a cross-encoder, relevance feedback, or query-specific rules. “Language-independent” means only that one Unicode-aware analyzer can process the Serbian Cyrillic, Serbian Latin, and English text present in this corpus without first identifying a language. It does not mean cross-lingual retrieval or multilingual semantic understanding. A Serbian query will generally not retrieve an English-only document unless the two share names, abbreviations, numbers, loanwords, or other surface character forms.
+Reč je o klasičnom, strogo leksičkom metodu. Boduje zajedničke normalizovane oblike reči i zajedničke delove karaktera. Ne koristi embedding reprezentacije, LLM, mašinsko prevođenje, preslovljavanje, rečnike, semantičko proširenje upita, cross-encoder, povratnu informaciju o relevantnosti ni pravila vezana za pojedinačne upite. Izraz „jezički nezavisna” označava samo da jedan Unicode analizator može da obradi srpsku ćirilicu, srpsku latinicu i engleski tekst iz ovog korpusa bez prethodnog određivanja jezika. Ne označava međujezičku pretragu ni višejezičko semantičko razumevanje. Srpski upit po pravilu neće pronaći dokument koji je isključivo na engleskom ako ne dele imena, skraćenice, brojeve, pozajmljene reči ili druge površinske oblike karaktera.
 
-The comparator strengthens the fairness of the thesis evaluation: the semantic systems are no longer compared only with raw word BM25 applied to natural-language questions. The new baseline adds a published, knowledge-light character representation while remaining non-semantic.
+Ovaj metod doprinosi pravednijem poređenju jer se semantički sistemi ne porede samo sa sirovim BM25 rangiranjem reči primenjenim na prirodno-jezička pitanja. Dodata je u literaturi opisana karakterska reprezentacija koja zahteva malo jezičkog predznanja, ali ostaje nesemantička.
 
-## Fixed design decision
+## Unapred utvrđen postupak
 
-The design was frozen before inspecting publication 4349 or the new rankings:
+Postupak je zamrznut pre pregleda publikacije 4349 i novih rangiranja:
 
-1. a word BM25 component;
-2. a within-token character 4-gram BM25 component;
-3. equal, unsupervised reciprocal-rank fusion (RRF) with `k = 60`.
+1. BM25 komponenta reči;
+2. BM25 komponenta karakterskih četvorograma unutar tokena;
+3. jednako, nenadgledano spajanje rangova reciprocal-rank fusion postupkom (RRF), uz `k = 60`.
 
-McNamee and Mayfield evaluated character n-gram tokenization across European-language retrieval collections and used 4-gram and 5-gram representations; their results and later CLEF procedure provide the independent precedent for a language-neutral 4-gram representation. Four was fixed here as the simpler, shorter of those established retrieval settings and was not selected from this evaluation's relevance grades. Cormack, Clarke, and Büttcher define RRF and fixed `k = 60` during their pilot before subsequent validation. RRF is appropriate because the numeric scores of the word and character indexes are not calibrated to each other. Robertson and Zaragoza provide the BM25 framework and parameter interpretation.
+McNamee i Mayfield ispitivali su tokenizaciju karakterskim n-gramima nad kolekcijama za pretragu na evropskim jezicima i koristili četvorograme i petograme. Njihovi rezultati i kasniji CLEF postupak predstavljaju nezavisnu osnovu za jezički neutralnu reprezentaciju četvorogramima. Vrednost četiri izabrana je kao jednostavnija i kraća od te dve potvrđene postavke, a ne prema ocenama relevantnosti iz ove evaluacije. Cormack, Clarke i Büttcher definišu RRF i fiksiraju `k = 60` tokom probnog rada pre naknadne provere. RRF odgovara ovom problemu pošto numerički rezultati indeksa reči i karaktera nisu međusobno kalibrisani. Robertson i Zaragoza daju BM25 okvir i tumačenje njegovih parametara.
 
-No existing relevance grade was used to select the gram size, fusion rule, fusion constant, BM25 parameters, title boost, normalization, or fields. The BM25 values and field boost were inherited unchanged from the historical raw comparator to isolate the effect of representation and fixed rank fusion.
+Nijedna postojeća ocena relevantnosti nije korišćena za izbor dužine n-grama, pravila spajanja, konstante spajanja, BM25 parametara, težine naslova, normalizacije ili polja. BM25 vrednosti i težina polja preuzete su bez promene iz istorijskog sirovog metoda kako bi se izdvojio uticaj reprezentacije i fiksnog spajanja rangova.
 
-## Exact analyzer
+## Tačan postupak analize
 
-For every query, title, and abstract independently:
+Za svaki upit, naslov i sažetak nezavisno se primenjuje sledeće:
 
-1. Replace a missing value with the empty string.
-2. Apply Unicode Normalization Form KC (NFKC).
-3. Apply Unicode default case folding through Python `str.casefold()`.
-4. Scan code points from left to right. A word token is a maximal run whose Unicode General Category begins with `L` (Letter), `M` (Mark), or `N` (Number). Every other code point, including whitespace, punctuation, symbols, and underscore, is a boundary and is discarded.
-5. The word component emits those tokens unchanged.
-6. The character component emits every overlapping sequence of exactly four Unicode code points inside each word token. It never crosses a word boundary and adds no boundary markers. If a token contains fewer than four code points, emit that whole token once so names and abbreviations such as `AI` do not create an empty representation.
+1. Nedostajuća vrednost zamenjuje se praznim tekstom.
+2. Primenjuje se Unicode Normalization Form KC (NFKC).
+3. Velika i mala slova izjednačavaju se podrazumevanim Unicode postupkom kroz Python `str.casefold()`.
+4. Kodne tačke čitaju se sleva nadesno. Token reči čini najduži neprekinuti niz čija Unicode opšta kategorija počinje sa `L` (Letter), `M` (Mark) ili `N` (Number). Svaka druga kodna tačka, uključujući beline, interpunkciju, simbole i donju crtu, predstavlja granicu i odbacuje se.
+5. Komponenta reči emituje dobijene tokene bez dodatne izmene.
+6. Karakterska komponenta emituje svaki preklapajući niz od tačno četiri Unicode kodne tačke unutar tokena. Niz nikada ne prelazi granicu reči i ne dobija posebne oznake granice. Ako token ima manje od četiri kodne tačke, ceo token emituje se jednom kako imena i skraćenice poput `AI` ne bi ostale bez reprezentacije.
 
-Diacritics are preserved. Serbian Latin and Serbian Cyrillic remain distinct scripts. There is no `č/ć/š/ž/đ` folding, Cyrillic-to-Latin conversion, or accent stripping. NFKC may compose/decompose compatibility forms as specified by Unicode, and case folding can change code-point length. Metadata records the Python version and `unicodedata.unidata_version` used for generation.
+Dijakritici se čuvaju. Srpska latinica i srpska ćirilica ostaju različita pisma. Ne primenjuju se svođenje znakova `č/ć/š/ž/đ`, preslovljavanje ćirilice u latinicu ni uklanjanje akcenata. NFKC može da sastavi ili rastavi kompatibilne oblike prema Unicode pravilima, a izjednačavanje slova može promeniti broj kodnih tačaka. Metapodaci beleže verziju Python-a i vrednost `unicodedata.unidata_version` korišćenu pri pravljenju rezultata.
 
-Examples:
+Primeri:
 
-| Input | Word tokens | Character representation (illustrative) |
+| Ulaz | Tokeni reči | Karakterska reprezentacija (primer) |
 |---|---|---|
 | `VEŠTAČKA` | `veštačka` | `vešt`, `ešta`, `štač`, `tačk`, `ačka` |
-| `ВЕШТАЧКА` | `вештачка` | Cyrillic 4-grams only |
+| `ВЕШТАЧКА` | `вештачка` | samo ćirilični četvorogrami |
 | `repo-search` | `repo`, `search` | `repo`, `sear`, `earc`, `arch` |
-| `AI` | `ai` | `ai` (short-token rule) |
+| `AI` | `ai` | `ai` (pravilo za kratke tokene) |
 
-## BM25 scoring
+## BM25 bodovanje
 
-Each representation builds separate title and abstract indexes using `bm25s==0.3.10`, its `lucene` method, `k1 = 1.2`, and `b = 0.75`. For query term `t` and document field `d`, the conventional BM25 form is:
+Svaka reprezentacija pravi odvojene indekse naslova i sažetka pomoću `bm25s==0.3.10`, metode `lucene` i parametara `k1 = 1.2` i `b = 0.75`. Za izraz upita `t` i polje dokumenta `d`, uobičajeni BM25 oblik je:
 
 \[
 BM25(d,q)=\sum_{t\in q} IDF(t)\frac{f(t,d)(k_1+1)}{f(t,d)+k_1\left(1-b+b\frac{|d|}{avgdl}\right)}
 \]
 
-where:
+gde je:
 
-- `q` is the analyzed query term sequence;
-- `f(t,d)` is the frequency of term `t` in field `d`;
-- `|d|` is the analyzed field length;
-- `avgdl` is the mean analyzed length of that field;
-- `k1` controls term-frequency saturation;
-- `b` controls length normalization;
-- `IDF(t)` is the Lucene-style inverse-document-frequency weight supplied by the pinned implementation.
+- `q` analizirani niz izraza upita;
+- `f(t,d)` učestalost izraza `t` u polju `d`;
+- `|d|` dužina analiziranog polja;
+- `avgdl` prosečna analizirana dužina tog polja;
+- `k1` parametar zasićenja učestalosti izraza;
+- `b` parametar normalizacije dužine;
+- `IDF(t)` Lucene težina inverzne učestalosti dokumenta koju daje fiksirana implementacija.
 
-For each component `c` (word or character), title and abstract are scored independently and combined as:
+Za svaku komponentu `c` (reč ili karakter), naslov i sažetak boduju se nezavisno i spajaju izrazom:
 
 \[
 S_c(D,q)=2.0\,BM25_{c,title}(D,q)+1.0\,BM25_{c,abstract}(D,q).
 \]
 
-The `2.0` title boost, title/abstract fields, `k1`, and `b` are inherited from the historical raw BM25 evaluation and were not reselected. Missing/empty abstracts create an empty field representation and contribute zero.
+Težina naslova `2.0`, polja naslova i sažetka i parametri `k1` i `b` preuzeti su iz istorijske sirove BM25 evaluacije i nisu ponovo birani. Nedostajući ili prazan sažetak daje praznu reprezentaciju polja i doprinos nula.
 
-Within a component, documents with a positive score are ordered by descending `S_c`; equal scores use ascending string `publication_id`. A document with zero component score is absent from that component's ranking.
+Unutar jedne komponente dokumenti sa pozitivnim rezultatom poređani su prema opadajućoj vrednosti `S_c`, a izjednačeni rezultati prema rastućem tekstualnom `publication_id`. Dokument čiji je rezultat komponente nula ne ulazi u njeno rangiranje.
 
 ## Reciprocal-rank fusion
 
-Let `R = {word, char4}` and let `r_c(D)` be the one-based rank of document `D` in component `c`. The fused score is:
+Neka je `R = {word, char4}`, a `r_c(D)` pozicija dokumenta `D`, počev od jedan, u komponenti `c`. Spojeni rezultat je:
 
 \[
 RRF(D)=\sum_{c\in R:D\in c}\frac{1}{60+r_c(D)}.
 \]
 
-The fixed constant is `60`. Components have equal weight. An absent document contributes zero for that component. Fusion considers every positive-score document, not only the requested output depth. Final results are ordered by descending RRF score and then ascending string `publication_id`. This creates deterministic result identities and scores; measured latency and generation timestamps are naturally run-specific.
+Konstanta je fiksirana na `60`, a komponente imaju jednake težine. Dokument koji ne postoji u jednoj komponenti dobija nulti doprinos te komponente. Spajanje razmatra svaki dokument sa pozitivnim rezultatom, a ne samo traženu dubinu izlaza. Završni rezultati poređani su prema opadajućem RRF rezultatu, zatim prema rastućem tekstualnom `publication_id`. Time se dobijaju deterministički identiteti i rezultati, dok trajanje i vreme pravljenja prirodno zavise od konkretnog izvršavanja.
 
-## Pseudocode
+## Pseudokod
 
 ```text
 build(corpus):
@@ -101,94 +101,94 @@ retrieve(query, limit):
   return first limit documents by score desc, publication_id asc
 ```
 
-## Frozen evaluation procedure and provenance
+## Zamrznuti postupak evaluacije i poreklo podataka
 
-The generator `python -m evaluation.language_independent_lexical_artifacts` requires full expected SHA-256 values for the query set, corpus snapshot, and historical run file. It rejects a mismatch and refuses to overwrite an existing directory. It runs only `language_independent_lexical` locally, loads the frozen historical file, and copies the `vector_only` and `full_pipeline` records without invoking their embedding or service boundaries. It validates those reused records against the frozen corpus and compares canonical record hashes after writing.
+Generator `python -m evaluation.language_independent_lexical_artifacts` zahteva pune očekivane SHA-256 vrednosti skupa upita, snimka korpusa i istorijske datoteke izvršavanja. Odbija neusaglašene vrednosti i ne prepisuje postojeći direktorijum. Lokalno pokreće samo `language_independent_lexical`, učitava zamrznutu istorijsku datoteku i kopira zapise `vector_only` i `full_pipeline` bez pozivanja njihovih embedding ili servisnih granica. Ponovo korišćeni zapisi proveravaju se prema zamrznutom korpusu, a hash vrednosti kanonskih zapisa porede se i posle upisa.
 
-Generated metadata includes method/analyzer versions, Python/Unicode/bm25s versions, every normalization operation, gram range, short-token and boundary rules, BM25 and field parameters, RRF rule, tie handling, logical index statistics, source/starting commits, corpus/query/frozen-run hashes, per-method reused-record hashes, generated artifact hashes, corpus/query counts, top-k, pool depth, seed, runtime, and UTC generation time. Logical index size is reported as analyzer term occurrences, vocabulary counts, and UTF-8 vocabulary bytes; it is not mislabeled as a serialized or resident-memory size.
+Generisani metapodaci obuhvataju verzije metoda i analizatora, verzije Python-a, Unicode-a i biblioteke bm25s, svaku operaciju normalizacije, opseg n-grama, pravila za kratke tokene i granice, BM25 parametre i parametre polja, RRF pravilo, obradu izjednačenih rezultata, logičku statistiku indeksa, izvorni i početni commit, hash vrednosti korpusa, upita i zamrznutih izvršavanja, hash vrednosti ponovo korišćenih zapisa po metodu i dobijenih datoteka, broj dokumenata i upita, top-k, dubinu skupa, seed, trajanje i UTC vreme. Logička veličina indeksa prikazuje se kao broj pojavljivanja izraza analizatora, veličina rečnika i broj UTF-8 bajtova rečnika; ne naziva se veličinom serijalizovanog indeksa ni rezidentne memorije.
 
-The candidate pool is the union of the first five results from exactly `language_independent_lexical`, `vector_only`, and `full_pipeline` for each of the 30 frozen queries. Duplicate `(query_id, publication_id)` pairs are collapsed. Candidate order is reproducibly shuffled per query with seed `2026`. Method identity, rank, and score are excluded from the scoring sheet.
+Skup kandidata predstavlja uniju prvih pet rezultata metoda `language_independent_lexical`, `vector_only` i `full_pipeline` za svaki od 30 zamrznutih upita. Ponovljeni parovi `(query_id, publication_id)` spajaju se u jedan. Redosled kandidata meša se ponovljivo unutar svakog upita uz seed `2026`. Identitet metoda, pozicija i rezultat nisu prikazani u listu za ocenjivanje.
 
-Completed grades are transferred only by exact `(query_id, publication_id)`. Blank cells remain blank; conflicts, duplicate pairs, invalid grades, old judged pairs leaving the pool, and newly unjudged pairs are all counted. No relevance is inferred. Final Precision@5, nDCG@5, and MRR@5 remain deferred until every new pooled pair is manually judged.
+Završene ocene prenose se isključivo prema tačnom paru `(query_id, publication_id)`. Prazna polja ostaju prazna, a program broji neslaganja, ponovljene parove, nevažeće ocene, prethodno ocenjene parove koji su napustili skup i nove neocenjene parove. Relevantnost se ne izvodi automatski. Završno računanje Precision@5, nDCG@5 i MRR@5 odlaže se dok svaki novi par ne dobije ručnu ocenu.
 
-Dry-run artifacts and the scoring workbook are retained locally and excluded from the repository. The tracked methodology and source commit provide the reproducible implementation record.
+Probne datoteke i radna sveska za ocenjivanje čuvaju se lokalno i isključeni su iz repozitorijuma. Praćeni opis postupka i izvorni commit čine ponovljivi zapis implementacije.
 
-### Frozen dry-run generated on 2026-08-09
+### Zamrznuto probno izvršavanje od 9. avgusta 2026.
 
-The isolated dry run was generated from source commit `9c7208e42a12e5a2da65eeee2802f51f5616a1c6`, which descends directly from the recorded `test` starting commit `bb88a7bdfc65139ba2465cbc47f2347257b89001`.
+Izolovano probno izvršavanje napravljeno je iz izvornog commita `9c7208e42a12e5a2da65eeee2802f51f5616a1c6`, koji neposredno potiče od zabeleženog početnog `test` commita `bb88a7bdfc65139ba2465cbc47f2347257b89001`.
 
-Protected input hashes all matched before generation and after workbook validation:
+Hash vrednosti zaštićenih ulaza odgovarale su pre izrade i posle provere radne sveske:
 
-- queries: `8fe5748b24f16f6c9e2d3037002eab1d4a613df1e1d419827da3768961d03f88`;
-- corpus snapshot: `b366854b50c7abb40b51c29a943f89fdd22b0af33cac6b6cd3371ff2404eebce`;
-- historical runs input: `86b36e45e377d42a07407150de14f309c4383f012466e22e5e3ae6d2db07264e`;
-- original scoring workbook: `0fff8874465fced16a8b4b2581884613eb4fb2846ce7c55ae932f42451a8381d`.
+- upiti: `8fe5748b24f16f6c9e2d3037002eab1d4a613df1e1d419827da3768961d03f88`;
+- snimak korpusa: `b366854b50c7abb40b51c29a943f89fdd22b0af33cac6b6cd3371ff2404eebce`;
+- ulaz istorijskih izvršavanja: `86b36e45e377d42a07407150de14f309c4383f012466e22e5e3ae6d2db07264e`;
+- izvorna radna sveska: `0fff8874465fced16a8b4b2581884613eb4fb2846ce7c55ae932f42451a8381d`.
 
-Generated artifact hashes:
+Hash vrednosti dobijenih datoteka:
 
 - `language-independent-lexical-runs.json`: `e89a820142acb94e9e8a4a6e394ee670e2e535285ea47b13a58e7318078b2430`;
-- combined `runs.json`: `0240547bd1b9ab085ab26461d2b3fa8a09df2f6a5b750404864bcf8a35c24011`;
-- blinded `candidates.csv`: `51b5f4765e1b2aa36b6d396d41720f969d4f1aa9a758d53c1ff40c7e6fec7dad`;
+- objedinjeni `runs.json`: `0240547bd1b9ab085ab26461d2b3fa8a09df2f6a5b750404864bcf8a35c24011`;
+- zaslepljeni `candidates.csv`: `51b5f4765e1b2aa36b6d396d41720f969d4f1aa9a758d53c1ff40c7e6fec7dad`;
 - `metadata.json`: `d77b8004c97a1520fb8d4fa59599d68cbfd6ad7ada5c6116a51b302676398273`;
 - `comparison/lexical-comparison.json`: `451c48dc61297a900328fe0f806f2fec517c4c34eecb6936e1af2a1bcd325ea3`;
-- expanded workbook: `b9fc752a571132ca5cf3b6ca50ac9b6a24a447d200414089b8a21eb192af8714`;
-- final judgment-transfer report: `419e8ac571ddeb01e102a802ccafa9b55ba3f73590d99bee83cee295925b8c75`.
+- proširena radna sveska: `b9fc752a571132ca5cf3b6ca50ac9b6a24a447d200414089b8a21eb192af8714`;
+- završni izveštaj o prenosu ocena: `419e8ac571ddeb01e102a802ccafa9b55ba3f73590d99bee83cee295925b8c75`.
 
-The pool contains 390 pairs. Relative to the historical raw-BM25 pool, 341 remain, 49 leave, and 49 enter. Of 253 completed judgments, 225 transfer exactly, 28 judged pairs leave the pool, the old workbook contains 137 blank rows, and the new workbook contains 165 unjudged rows. Conflicts, duplicate-pair errors, and invalid grades are all zero. These are workload/provenance counts, not effectiveness results.
+Skup sadrži 390 parova. U odnosu na istorijski skup sirovog BM25 metoda, 341 par ostaje, 49 izlazi i 49 ulazi. Od 253 završene ocene, 225 se prenosi tačno, 28 ocenjenih parova napušta skup, stara radna sveska ima 137 praznih redova, a nova 165 neocenjenih redova. Broj neslaganja, grešaka ponovljenih parova i nevažećih ocena je nula. Reč je o pokazateljima obima rada i porekla podataka, a ne o rezultatima uspešnosti.
 
-The locally retained validated workbook contains three rendered and reopened sheets, four long-abstract entries expanded across the dedicated full-text sheet, and zero detected formula errors.
+Lokalno sačuvana i proverena radna sveska sadrži tri prikazana i ponovo otvorena lista, četiri duga sažetka proširena u posebnom listu sa celim tekstom i nijednu uočenu grešku formule.
 
-The non-qrels comparison retains 96 of 150 raw lexical top-five pairs and 341 of 390 full-pool pairs. Publication 4349 was inspected only after the method and run were frozen: it is outside depth five at ranks 17, 8, and 15 for q17, q19, and q20 respectively. This is post-hoc error analysis and is not a method-selection argument.
+Poređenje koje ne koristi ocene relevantnosti zadržava 96 od 150 prvih pet parova sirovog leksičkog metoda i 341 od 390 parova celog skupa. Publikacija 4349 pregledana je tek pošto su metod i izvršavanje zamrznuti: za upite q17, q19 i q20 nalazi se na pozicijama 17, 8 i 15. Ovo je naknadna analiza greške, a ne razlog za izbor metoda.
 
-## Tests
+## Testovi
 
-Automated tests cover deterministic ordering/scores; NFKC and case folding; Serbian Cyrillic and Latin; English and mixed text; preserved diacritics and combining marks; punctuation boundaries; short tokens, names, and abbreviations; empty/missing abstracts; exact metadata; invalid gram/RRF/CLI values; frozen hash rejection; no calls to semantic retrieval during isolated artifact generation; unchanged reused vector/full-pipeline records; blinded/deduplicated pooling; and stable-pair judgment transfer with blank/conflict/unmatched counts. Synthetic fixtures contain no frozen human relevance targets.
+Automatizovani testovi obuhvataju deterministički redosled i rezultate; NFKC i svođenje slova; srpsku ćirilicu i latinicu; engleski i mešoviti tekst; očuvane dijakritike i kombinovane znakove; granice interpunkcije; kratke tokene, imena i skraćenice; prazne ili nedostajuće sažetke; tačne metapodatke; nevažeće vrednosti n-grama, RRF-a i komandne linije; odbijanje pogrešnih zamrznutih hash vrednosti; odsustvo poziva semantičke pretrage tokom izolovane izrade; nepromenjene ponovo korišćene zapise vektorske i kompletne putanje; zaslepljeno formiranje skupa bez duplikata; i prenos ocena za stabilne parove sa brojem praznih, konfliktnih i neuparenih stavki. Sintetički ulazi ne sadrže zamrznute ljudske ocene relevantnosti.
 
-## Evaluation strata
+## Grupe evaluacije
 
-Query metadata must continue to record language, script, category, and topic. Chapter 6 analysis should distinguish at least same-language lexical needs from cross-language information needs. The lexical baseline is expected to be meaningful chiefly in the same-language/shared-form stratum. It must not be presented as evidence that character n-grams solve cross-language retrieval.
+Metapodaci upita moraju i dalje sadržati jezik, pismo, kategoriju i temu. Analiza u poglavlju 6 treba da razlikuje najmanje leksičke potrebe na istom jeziku od međujezičkih informacionih potreba. Leksička osnova ima najviše smisla u grupi istog jezika i zajedničkih oblika. Ne sme se predstavljati kao dokaz da karakterski n-grami rešavaju međujezičku pretragu.
 
-## Limitations and defensible claims
+## Ograničenja i odbranjive tvrdnje
 
-Defensible:
+Moguće je tvrditi:
 
-- one fixed analyzer handles the Serbian Cyrillic, Serbian Latin, and English surface text in this corpus;
-- character 4-grams reduce dependence on exact whole-word equality and can share evidence across related inflected/spelling forms within the same script;
-- the method is deterministic, transparent, reproducible, and strictly lexical;
-- the method is stronger than using only unchanged natural-language word tokens as the comparator design, without asserting effectiveness before judgments are complete.
+- jedan fiksirani analizator obrađuje površinski tekst srpske ćirilice, srpske latinice i engleskog jezika u ovom korpusu;
+- karakterski četvorogrami smanjuju zavisnost od potpuno jednakih celih reči i mogu deliti signal između srodnih flektivnih i pravopisnih oblika unutar istog pisma;
+- metod je deterministički, jasan, ponovljiv i strogo leksički;
+- metod je prikladniji za poređenje od korišćenja samo nepromenjenih tokena reči iz prirodno-jezičkih pitanja, bez tvrdnje o uspešnosti pre završetka ocenjivanja.
 
-Not defensible:
+Nije moguće tvrditi:
 
-- universal multilingual support;
-- semantic understanding, synonymy, or conceptual equivalence;
-- Serbian-to-English or Cyrillic-to-Latin retrieval without shared forms;
-- robustness to arbitrary spelling differences, OCR errors, or transliteration;
-- superiority over raw BM25 before complete judgments and prespecified metrics are available;
-- reproduction of Google Scholar, DSpace/Solr, or any production repository index.
+- univerzalnu višejezičku podršku;
+- semantičko razumevanje, sinonimiju ili pojmovnu jednakost;
+- pretragu sa srpskog na engleski ili sa ćirilice na latinicu bez zajedničkih oblika;
+- otpornost na proizvoljne pravopisne razlike, OCR greške ili preslovljavanje;
+- nadmoć nad sirovim BM25 metodom pre kompletnih ocena i unapred definisanih mera;
+- reprodukciju Google Scholar, DSpace/Solr ili drugog produkcionog indeksa repozitorijuma.
 
-Character indexes are larger than word indexes and can match incidental substrings. RRF discards score magnitude and treats both components equally. NFKC/case folding are irreversible. Punctuation is discarded, so symbol-heavy terms such as `C++` lose distinctions. The short-token rule protects recall for abbreviations but can retain generic short forms.
+Karakterski indeksi veći su od indeksa reči i mogu odgovarati slučajnim delovima teksta. RRF odbacuje veličinu rezultata i jednako tretira obe komponente. NFKC i svođenje slova nisu povratne operacije. Interpunkcija se odbacuje, pa izrazi sa mnogo simbola, kao `C++`, gube razlike. Pravilo za kratke tokene čuva odziv skraćenica, ali može zadržati i opšte kratke oblike.
 
-## Thesis-ready methodology outline
+## Okvir metodologije za master rad
 
-1. Motivate a fair, non-semantic comparator for natural-language Serbian/English queries.
-2. Define “language-independent” as analyzer reuse, not cross-lingual understanding.
-3. Specify NFKC, case folding, Unicode-category token boundaries, preserved diacritics/scripts, exact 4-grams, and short-token fallback.
-4. Present separate title/abstract BM25 equations and the inherited `2:1` field combination.
-5. Present RRF with two equal components and fixed `k=60`.
-6. State deterministic tie rules and complete provenance.
-7. Explain frozen hashes, reuse of vector/full runs, depth-5 blinded pooling, and stable-pair judgment transfer.
-8. Report pool churn/runtime/logical index size without using incomplete grades to claim improvement.
-9. Analyze results by language/script/information-need stratum after judgments are complete.
-10. Bound conclusions to lexical overlap and this frozen corpus/query set.
+1. Obrazložiti izbor pravednog, nesemantičkog metoda za poređenje prirodno-jezičkih upita na srpskom i engleskom.
+2. Definisati „jezički nezavisan” kao ponovnu upotrebu analizatora, a ne međujezičko razumevanje.
+3. Navesti NFKC, svođenje slova, granice tokena prema Unicode kategorijama, očuvanje dijakritika i pisama, tačne četvorograme i pravilo za kratke tokene.
+4. Prikazati odvojene BM25 izraze naslova i sažetka i preuzeti odnos polja `2:1`.
+5. Prikazati RRF sa dve jednake komponente i fiksnim `k=60`.
+6. Navesti determinističko rešavanje jednakih rezultata i podatke potrebne za ponavljanje postupka.
+7. Objasniti zamrznute hash vrednosti, ponovnu upotrebu vektorskih i kompletnih izvršavanja, zaslepljeno formiranje skupa dubine pet i prenos ocena prema stabilnom paru.
+8. Prikazati promene skupa, trajanje i logičku veličinu indeksa bez korišćenja nepotpunih ocena za tvrdnju o poboljšanju.
+9. Posle završetka ocenjivanja analizirati rezultate prema jeziku, pismu i vrsti informacione potrebe.
+10. Ograničiti zaključke na leksičko preklapanje i korišćeni zamrznuti korpus i skup upita.
 
-## Reference review for Zotero/thesis
+## Literatura za proveru u Zotero biblioteci i radu
 
-These sources were introduced by this baseline and should be reviewed before being added to Zotero or cited in the thesis. No quotations are copied into this document.
+Sledeći izvori uvedeni su uz ovaj metod i treba ih proveriti pre dodavanja u Zotero ili citiranja u radu. Tekst iz izvora nije prepisivan u ovaj dokument.
 
-1. Paul McNamee and James Mayfield, “Character N-Gram Tokenization for European Language Text Retrieval,” *Information Retrieval* 7, 73–97 (2004). DOI: `10.1023/B:INRT.0000009441.78971.be`. Stable URL: https://doi.org/10.1023/B:INRT.0000009441.78971.be. Supports character n-grams as a knowledge-light/language-neutral retrieval representation and the established 4-/5-gram experimental precedent; it does not support a claim of semantic or universal multilingual retrieval.
-2. Gordon V. Cormack, Charles L. A. Clarke, and Stefan Büttcher, “Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods,” SIGIR 2009. DOI: `10.1145/1571941.1572114`; ISBN: `978-1-60558-483-6`. Author PDF: https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf. Supports the RRF equation, rank-only fusion motivation, and fixed `k=60`.
-3. Stephen Robertson and Hugo Zaragoza, “The Probabilistic Relevance Framework: BM25 and Beyond,” *Foundations and Trends in Information Retrieval* 3(4), 333–389 (2009). DOI: `10.1561/1500000019`; ISBN: `978-1-60198-308-4`. Stable URL: https://doi.org/10.1561/1500000019. Supports the BM25 framework, term-frequency saturation, document-length normalization, and parameter interpretation.
-4. Mark Davis and Martin Dürst, “Unicode Normalization Forms,” Unicode Standard Annex #15. Stable URL: https://unicode.org/reports/tr15/. No DOI/ISBN. Authoritative source for NFKC behavior; the concrete Unicode data version remains runtime provenance.
-5. The Unicode Consortium, *The Unicode Standard*, default case operations and CaseFolding data. Stable URLs: https://www.unicode.org/versions/latest/ and https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt. ISBN for the continuously updated online standard is not assigned. Supports the case-folding operation and Unicode General Category terminology.
+1. Paul McNamee and James Mayfield, “Character N-Gram Tokenization for European Language Text Retrieval,” *Information Retrieval* 7, 73–97 (2004). DOI: `10.1023/B:INRT.0000009441.78971.be`. Stable URL: https://doi.org/10.1023/B:INRT.0000009441.78971.be. Izvor podržava karakterske n-grame kao reprezentaciju koja zahteva malo jezičkog predznanja i eksperimentalnu primenu četvorograma i petograma; ne podržava tvrdnju o semantičkoj ili univerzalnoj višejezičkoj pretrazi.
+2. Gordon V. Cormack, Charles L. A. Clarke, and Stefan Büttcher, “Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods,” SIGIR 2009. DOI: `10.1145/1571941.1572114`; ISBN: `978-1-60558-483-6`. Author PDF: https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf. Izvor podržava RRF izraz, obrazloženje spajanja samo prema rangu i fiksno `k=60`.
+3. Stephen Robertson and Hugo Zaragoza, “The Probabilistic Relevance Framework: BM25 and Beyond,” *Foundations and Trends in Information Retrieval* 3(4), 333–389 (2009). DOI: `10.1561/1500000019`; ISBN: `978-1-60198-308-4`. Stable URL: https://doi.org/10.1561/1500000019. Izvor podržava BM25 okvir, zasićenje učestalosti izraza, normalizaciju prema dužini dokumenta i tumačenje parametara.
+4. Mark Davis and Martin Dürst, “Unicode Normalization Forms,” Unicode Standard Annex #15. Stable URL: https://unicode.org/reports/tr15/. No DOI/ISBN. Autoritativni izvor za NFKC; konkretna verzija Unicode podataka ostaje deo podataka o izvršavanju.
+5. The Unicode Consortium, *The Unicode Standard*, default case operations and CaseFolding data. Stable URLs: https://www.unicode.org/versions/latest/ and https://www.unicode.org/Public/UCD/latest/ucd/CaseFolding.txt. ISBN for the continuously updated online standard is not assigned. Izvor podržava operaciju izjednačavanja velikih i malih slova i terminologiju opštih Unicode kategorija.
 
-Implementation-only provenance (normally not a thesis literature citation): `bm25s==0.3.10`, https://github.com/xhluca/bm25s, Apache-2.0. It is an existing pinned dependency; this change adds no library.
+Poreklo same implementacije, koje obično nije bibliografski izvor master rada: `bm25s==0.3.10`, https://github.com/xhluca/bm25s, Apache-2.0. Biblioteka je već bila fiksirana zavisnost; ova promena ne uvodi novu biblioteku.
