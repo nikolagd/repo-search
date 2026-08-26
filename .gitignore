@@ -137,6 +137,7 @@ celerybeat.pid
 # Environments
 .env
 .env.microservices
+.env.mac
 .envrc
 .venv
 env/
@@ -213,6 +214,7 @@ docs/*
 !docs/ci-workflow.md
 !docs/observability.md
 !docs/docker-compose-microservices.md
+!docs/macbook-demo.md
 
 # Local thesis and bibliography working files
 .local-artifacts/

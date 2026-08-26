@@ -1,0 +1,46 @@
+# Lightweight Apple-silicon development/demo override.
+#
+# Ollama runs on macOS (Metal accelerated), not in Docker. The embedding model
+# remains in an ARM64 Linux container and uses CPU because Docker Desktop does
+# not expose the Apple GPU through CUDA or PyTorch MPS.
+services:
+  db-replica:
+    profiles: ["replication"]
+
+  embedding-service:
+    gpus: !reset []
+    environment:
+      EMBEDDING_DEVICE: cpu
+      GPU_REQUIRED: "false"
+      NVIDIA_VISIBLE_DEVICES: ""
+      NVIDIA_DRIVER_CAPABILITIES: ""
+    deploy:
+      resources:
+        limits:
+          memory: 3500M
+
+  query-service:
+    environment:
+      LLM_URL: http://host.docker.internal:11434/api/generate
+      LLM_MODEL: ${LLM_MODEL:-gemma3:4b}
+      LLM_WARMUP_ENABLED: ${LLM_WARMUP_ENABLED:-0}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  job-worker:
+    profiles: ["ingestion"]
+
+  ollama:
+    profiles: ["nvidia-container"]
+
+  prometheus:
+    profiles: ["observability"]
+
+  grafana:
+    profiles: ["observability"]
+
+  postgres-exporter:
+    profiles: ["observability"]
+
+  cadvisor:
+    profiles: ["observability"]

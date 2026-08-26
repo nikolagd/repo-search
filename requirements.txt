@@ -49,8 +49,10 @@ shellingham==1.5.4
 sympy==1.14.0
 threadpoolctl==3.6.0
 tokenizers==0.22.2
-torch==2.11.0+cu130
-torchvision==0.26.0+cu130
+# Keep the public version portable. The configured pip index selects the
+# CUDA build on NVIDIA/x86 hosts and the native CPU build on ARM64 hosts.
+torch==2.11.0
+torchvision==0.26.0
 tqdm==4.67.3
 transformers==5.5.3
 typer==0.24.1

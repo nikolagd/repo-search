@@ -1,5 +1,7 @@
 Primarni način pokretanja aplikacije je GPU Kubernetes deployment preko lokalnog Minikube klastera i `k8s-gpu/` overlay-a. Embedding Service zahteva CUDA, a Ollama koristi GPU za `gemma4:12b` inference.
 
+Za razvoj i demonstraciju na Apple-silicon Mac računaru koristi se lagani Compose profil sa nativnim Metal-ubrzanim Ollama procesom; uputstvo je u [docs/macbook-demo.md](docs/macbook-demo.md).
+
 Docker Compose uputstvo je arhivirano u [docs/docker-compose-microservices.md](docs/docker-compose-microservices.md) i treba ga koristiti samo za lokalni smoke test, debugging van Kubernetes-a ili poređenje sa manifestima.
 
 ## Režimi pretrage i filter autora
